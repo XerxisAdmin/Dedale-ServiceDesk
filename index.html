@@ -1,0 +1,706 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<title>Dedale — IT Service Desk</title>
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700;900&family=Share+Tech+Mono&family=Rajdhani:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://alcdn.msauth.net/browser/2.38.0/js/msal-browser.min.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;}
+:root{
+  --navy:#141628;--navy-mid:#1a1d38;--surface:#1e2240;--surface2:#252952;
+  --border:#383d72;--border2:#2a2e5a;
+  --crimson:#cc2244;--crimson-dim:#881630;
+  --gold:#d4a830;--gold-dim:#8a6a18;
+  --green:#22cc88;--green-dim:#145c3e;
+  --orange:#e07030;--blue:#3088cc;
+  --text:#e4e8ff;--text2:#9aa2cc;--text3:#565e90;
+  --low:#22cc88;--medium:#d4a830;--high:#e07030;--critical:#cc2244;
+}
+body{font-family:'Rajdhani',sans-serif;background:var(--navy);color:var(--text);min-height:100vh;font-size:16px;
+  background-image:repeating-linear-gradient(0deg,rgba(26,29,56,0.4) 0,rgba(26,29,56,0.4) 1px,transparent 1px,transparent 40px),
+  repeating-linear-gradient(90deg,rgba(26,29,56,0.4) 0,rgba(26,29,56,0.4) 1px,transparent 1px,transparent 40px);}
+/* Scanline overlay */
+body::before{content:'';position:fixed;inset:0;pointer-events:none;background:repeating-linear-gradient(0deg,rgba(0,0,0,0.03) 0,rgba(0,0,0,0.03) 1px,transparent 1px,transparent 3px);z-index:9998;}
+/* Header */
+#header{position:fixed;top:0;left:0;right:0;height:52px;background:rgba(20,22,40,0.96);border-bottom:1px solid var(--border2);display:flex;align-items:center;padding:0 20px;gap:16px;z-index:100;backdrop-filter:blur(8px);}
+#header::after{content:'';position:absolute;bottom:0;left:0;right:0;height:1px;background:linear-gradient(90deg,var(--crimson),var(--gold) 60%,transparent);}
+.hdr-logo{font-family:'Orbitron',monospace;font-size:13px;font-weight:700;color:#fff;letter-spacing:2px;}
+.hdr-sub{font-family:'Share Tech Mono',monospace;font-size:9px;color:var(--crimson);letter-spacing:2px;text-transform:uppercase;}
+.hdr-divider{width:1px;height:24px;background:var(--border2);margin:0 4px;}
+.hdr-title{font-family:'Share Tech Mono',monospace;font-size:10px;color:var(--text3);letter-spacing:2px;text-transform:uppercase;}
+.hdr-right{margin-left:auto;display:flex;align-items:center;gap:12px;}
+.user-badge{display:flex;align-items:center;gap:8px;background:var(--surface);border:1px solid var(--border2);padding:4px 12px 4px 6px;clip-path:polygon(0 0,calc(100% - 6px) 0,100% 6px,100% 100%,6px 100%,0 calc(100% - 6px));}
+.user-avatar{width:26px;height:26px;background:var(--crimson-dim);display:flex;align-items:center;justify-content:center;font-family:'Orbitron',monospace;font-size:9px;font-weight:700;color:#fff;}
+.user-name{font-family:'Share Tech Mono',monospace;font-size:9px;color:var(--text2);letter-spacing:1px;}
+.user-role{font-size:8px;color:var(--crimson);letter-spacing:1px;text-transform:uppercase;}
+/* Login screen */
+#login-screen{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:var(--navy);z-index:200;}
+.login-card{background:var(--surface);border:1px solid var(--border);padding:40px;width:380px;clip-path:polygon(0 0,calc(100% - 20px) 0,100% 20px,100% 100%,20px 100%,0 calc(100% - 20px));position:relative;}
+.login-card::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,var(--crimson),var(--gold) 60%,transparent);}
+.login-logo{font-family:'Orbitron',monospace;font-size:18px;font-weight:700;color:#fff;letter-spacing:3px;margin-bottom:4px;}
+.login-sub{font-family:'Share Tech Mono',monospace;font-size:9px;color:var(--crimson);letter-spacing:3px;text-transform:uppercase;margin-bottom:32px;}
+.login-title{font-size:22px;font-weight:700;color:var(--text);margin-bottom:8px;}
+.login-desc{font-size:13px;color:var(--text2);margin-bottom:28px;line-height:1.6;}
+.btn-login{width:100%;padding:13px;background:var(--crimson);color:#fff;border:none;font-family:'Orbitron',monospace;font-size:10px;font-weight:600;letter-spacing:2px;cursor:pointer;clip-path:polygon(0 0,calc(100% - 8px) 0,100% 8px,100% 100%,8px 100%,0 calc(100% - 8px));}
+.btn-login:hover{background:#dd2244;}
+/* Main layout */
+#app{display:none;padding-top:52px;min-height:100vh;}
+/* Tabs */
+#tabs{display:flex;gap:0;border-bottom:1px solid var(--border2);background:var(--navy-mid);padding:0 20px;}
+.tab{padding:12px 20px;font-family:'Share Tech Mono',monospace;font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:var(--text3);cursor:pointer;border-bottom:2px solid transparent;transition:all 0.2s;}
+.tab:hover{color:var(--text2);}
+.tab.active{color:var(--gold);border-bottom-color:var(--gold);}
+/* Views */
+.view{display:none;padding:24px 20px;}
+.view.active{display:block;}
+/* Page header */
+.page-hdr{display:flex;align-items:center;justify-content:space-between;margin-bottom:24px;}
+.page-title{font-family:'Orbitron',monospace;font-size:14px;font-weight:700;color:#fff;letter-spacing:2px;text-transform:uppercase;}
+.page-sub{font-family:'Share Tech Mono',monospace;font-size:9px;color:var(--text3);letter-spacing:1.5px;margin-top:3px;}
+/* Stats */
+.stats-row{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:24px;}
+.stat-card{background:var(--surface);border:1px solid var(--border2);padding:16px;clip-path:polygon(0 0,calc(100% - 8px) 0,100% 8px,100% 100%,0 100%);}
+.stat-label{font-family:'Share Tech Mono',monospace;font-size:9px;color:var(--text3);letter-spacing:1.5px;text-transform:uppercase;margin-bottom:8px;display:flex;align-items:center;gap:6px;}
+.stat-label::before{content:'◆';font-size:7px;color:var(--crimson);}
+.stat-value{font-family:'Share Tech Mono',monospace;font-size:26px;color:var(--crimson);}
+.stat-value.gold{color:var(--gold);}
+.stat-value.green{color:var(--green);}
+.stat-value.orange{color:var(--orange);}
+/* Filters */
+.filters{display:flex;gap:10px;margin-bottom:16px;flex-wrap:wrap;}
+select.f-select{background:var(--surface);border:1px solid var(--border2);color:var(--text2);padding:7px 12px;font-family:'Share Tech Mono',monospace;font-size:10px;letter-spacing:1px;}
+/* Incident list */
+.inc-list{display:flex;flex-direction:column;gap:8px;}
+.inc-card{background:var(--surface);border:1px solid var(--border2);padding:16px 20px;cursor:pointer;transition:border-color 0.15s;position:relative;}
+.inc-card:hover{border-color:var(--border);}
+.inc-card::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;}
+.inc-card.open::before{background:var(--crimson);}
+.inc-card.in-progress::before{background:var(--gold);}
+.inc-card.resolved::before{background:var(--green);}
+.inc-top{display:flex;align-items:center;gap:12px;margin-bottom:8px;}
+.inc-id{font-family:'Share Tech Mono',monospace;font-size:11px;color:var(--gold);letter-spacing:1px;}
+.inc-title{font-size:15px;font-weight:600;color:var(--text);flex:1;}
+.inc-meta{display:flex;gap:16px;font-family:'Share Tech Mono',monospace;font-size:10px;color:var(--text3);}
+.inc-meta span{display:flex;align-items:center;gap:4px;}
+/* Badges */
+.badge{display:inline-block;padding:2px 10px;font-family:'Share Tech Mono',monospace;font-size:9px;font-weight:700;letter-spacing:1px;clip-path:polygon(4px 0,100% 0,calc(100% - 4px) 100%,0 100%);}
+.badge-open{background:rgba(204,34,68,0.15);color:var(--crimson);}
+.badge-in-progress{background:rgba(212,168,48,0.15);color:var(--gold);}
+.badge-resolved{background:rgba(34,204,136,0.15);color:var(--green);}
+.badge-low{background:rgba(34,204,136,0.12);color:var(--low);}
+.badge-medium{background:rgba(212,168,48,0.12);color:var(--medium);}
+.badge-high{background:rgba(224,112,48,0.12);color:var(--high);}
+.badge-critical{background:rgba(204,34,68,0.15);color:var(--critical);}
+/* Buttons */
+.btn{padding:8px 20px;font-family:'Orbitron',monospace;font-size:9px;font-weight:600;letter-spacing:2px;text-transform:uppercase;border:none;cursor:pointer;clip-path:polygon(0 0,calc(100% - 5px) 0,100% 5px,100% 100%,5px 100%,0 calc(100% - 5px));}
+.btn-primary{background:var(--crimson);color:#fff;}
+.btn-primary:hover{background:#dd2244;}
+.btn-success{background:rgba(34,204,136,0.2);color:var(--green);border:1px solid var(--green-dim);}
+.btn-gold{background:rgba(212,168,48,0.2);color:var(--gold);border:1px solid var(--gold-dim);}
+.btn-outline{background:transparent;color:var(--text2);border:1px solid var(--border);}
+.btn-sm{padding:5px 14px;font-size:8px;}
+/* Modal */
+.modal{display:none;position:fixed;inset:0;background:rgba(10,12,28,0.85);z-index:300;align-items:center;justify-content:center;padding:20px;}
+.modal.open{display:flex;}
+.modal-box{background:var(--surface);border:1px solid var(--border);width:100%;max-width:580px;max-height:90vh;overflow-y:auto;position:relative;}
+.modal-box::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,var(--crimson),var(--gold) 60%,transparent);}
+.modal-header{padding:20px 24px 16px;border-bottom:1px solid var(--border2);display:flex;justify-content:space-between;align-items:center;}
+.modal-title{font-family:'Orbitron',monospace;font-size:12px;font-weight:700;color:#fff;letter-spacing:2px;}
+.modal-close{background:none;border:none;color:var(--text3);font-size:18px;cursor:pointer;padding:0 4px;}
+.modal-close:hover{color:var(--text);}
+.modal-body{padding:24px;}
+/* Forms */
+.form-group{margin-bottom:18px;}
+.form-label{font-family:'Share Tech Mono',monospace;font-size:10px;color:var(--gold);letter-spacing:1.5px;text-transform:uppercase;margin-bottom:6px;display:block;}
+.form-label .req{color:var(--crimson);}
+.form-control{width:100%;background:var(--navy-mid);border:1px solid var(--border2);color:var(--text);padding:10px 14px;font-family:'Rajdhani',sans-serif;font-size:14px;font-weight:500;}
+.form-control:focus{outline:none;border-color:var(--crimson);}
+textarea.form-control{resize:vertical;min-height:100px;}
+select.form-control{cursor:pointer;}
+.form-row{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
+/* Detail panel */
+.detail-box{background:var(--navy-mid);border:1px solid var(--border2);padding:16px;margin-bottom:16px;}
+.detail-label{font-family:'Share Tech Mono',monospace;font-size:9px;color:var(--gold);letter-spacing:1.5px;text-transform:uppercase;margin-bottom:4px;}
+.detail-value{font-size:14px;font-weight:600;color:var(--text);}
+.detail-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px;}
+/* Notes */
+.notes-section{margin-top:8px;}
+.note-item{background:var(--navy-mid);border-left:3px solid var(--gold);padding:10px 14px;margin-bottom:8px;}
+.note-meta{font-family:'Share Tech Mono',monospace;font-size:9px;color:var(--text3);margin-bottom:4px;}
+.note-text{font-size:13px;color:var(--text2);}
+/* Empty state */
+.empty-state{text-align:center;padding:60px 20px;}
+.empty-icon{font-size:32px;margin-bottom:12px;opacity:0.3;}
+.empty-title{font-family:'Orbitron',monospace;font-size:12px;color:var(--text3);letter-spacing:2px;}
+.empty-sub{font-size:13px;color:var(--text3);margin-top:6px;}
+/* Status action buttons */
+.action-row{display:flex;gap:8px;flex-wrap:wrap;margin-top:16px;padding-top:16px;border-top:1px solid var(--border2);}
+/* Notification dot */
+.notif-dot{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--crimson);margin-left:6px;vertical-align:middle;animation:pulse 2s infinite;}
+@keyframes pulse{0%,100%{opacity:1;}50%{opacity:0.4;}}
+/* Mobile */
+@media(max-width:768px){
+  .stats-row{grid-template-columns:1fr 1fr;}
+  .form-row{grid-template-columns:1fr;}
+  .detail-grid{grid-template-columns:1fr;}
+  #tabs{padding:0 10px;overflow-x:auto;}
+  .tab{white-space:nowrap;}
+  .view{padding:16px 12px;}
+}
+</style>
+</head>
+<body>
+
+<!-- Login -->
+<div id="login-screen">
+  <div class="login-card">
+    <div class="login-logo">DEDALE</div>
+    <div class="login-sub">Intelligence // IT Operations</div>
+    <div class="login-title">IT Service Desk</div>
+    <div class="login-desc">Sign in with your Dedale Microsoft account to submit or manage IT incidents.</div>
+    <button class="btn-login" onclick="doLogin()">&#9654; SIGN IN WITH MICROSOFT</button>
+  </div>
+</div>
+
+<!-- Header -->
+<div id="header" style="display:none;">
+  <div>
+    <div class="hdr-logo">DEDALE</div>
+    <div class="hdr-sub">IT Service Desk</div>
+  </div>
+  <div class="hdr-divider"></div>
+  <div class="hdr-title">INTEL-SD v1.0</div>
+  <div class="hdr-right">
+    <div class="user-badge">
+      <div class="user-avatar" id="hdr-avatar">XD</div>
+      <div>
+        <div class="user-name" id="hdr-name">Loading...</div>
+        <div class="user-role" id="hdr-role">Staff</div>
+      </div>
+    </div>
+    <button class="btn btn-outline btn-sm" onclick="doLogout()">Sign Out</button>
+  </div>
+</div>
+
+<!-- App -->
+<div id="app">
+  <div id="tabs">
+    <div class="tab active" id="tab-dashboard" onclick="showTab('dashboard')">Dashboard</div>
+    <div class="tab" id="tab-incidents" onclick="showTab('incidents')">
+      Incidents <span id="open-badge" style="display:none;" class="notif-dot"></span>
+    </div>
+    <div class="tab" id="tab-submit" onclick="showTab('submit')">+ New Incident</div>
+  </div>
+
+  <!-- Dashboard -->
+  <div class="view active" id="view-dashboard">
+    <div class="page-hdr">
+      <div>
+        <div class="page-title">Dashboard</div>
+        <div class="page-sub" id="dash-sub">INTEL-SD // IT SERVICE DESK</div>
+      </div>
+    </div>
+    <div class="stats-row" id="stats-row">
+      <div class="stat-card"><div class="stat-label">Open</div><div class="stat-value" id="stat-open">0</div></div>
+      <div class="stat-card"><div class="stat-label">In Progress</div><div class="stat-value gold" id="stat-progress">0</div></div>
+      <div class="stat-card"><div class="stat-label">Resolved</div><div class="stat-value green" id="stat-resolved">0</div></div>
+      <div class="stat-card"><div class="stat-label">Total</div><div class="stat-value orange" id="stat-total">0</div></div>
+    </div>
+    <div id="recent-incidents">
+      <div class="page-title" style="font-size:11px;margin-bottom:12px;">RECENT INCIDENTS</div>
+      <div id="recent-list"><div class="empty-state"><div class="empty-icon">📋</div><div class="empty-title">No incidents yet</div></div></div>
+    </div>
+  </div>
+
+  <!-- Incidents -->
+  <div class="view" id="view-incidents">
+    <div class="page-hdr">
+      <div>
+        <div class="page-title">Incidents</div>
+        <div class="page-sub">All submitted incidents</div>
+      </div>
+    </div>
+    <div class="filters">
+      <select class="f-select" id="f-status" onchange="renderIncidents()">
+        <option value="">All Statuses</option>
+        <option value="Open">Open</option>
+        <option value="In Progress">In Progress</option>
+        <option value="Resolved">Resolved</option>
+      </select>
+      <select class="f-select" id="f-category" onchange="renderIncidents()">
+        <option value="">All Categories</option>
+        <option value="Hardware Issue">Hardware Issue</option>
+        <option value="Software Issue">Software Issue</option>
+        <option value="Access Request">Access Request</option>
+        <option value="Network">Network</option>
+        <option value="Other">Other</option>
+      </select>
+      <select class="f-select" id="f-urgency" onchange="renderIncidents()">
+        <option value="">All Urgency</option>
+        <option value="Low">Low</option>
+        <option value="Medium">Medium</option>
+        <option value="High">High</option>
+        <option value="Critical">Critical</option>
+      </select>
+    </div>
+    <div class="inc-list" id="inc-list"></div>
+  </div>
+
+  <!-- Submit -->
+  <div class="view" id="view-submit">
+    <div class="page-hdr">
+      <div>
+        <div class="page-title">New Incident</div>
+        <div class="page-sub">Submit an IT support request</div>
+      </div>
+    </div>
+    <div style="background:var(--surface);border:1px solid var(--border2);padding:24px;max-width:640px;position:relative;">
+      <div style="position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,var(--crimson),var(--gold) 60%,transparent);"></div>
+      <div class="form-group">
+        <label class="form-label">Incident Title <span class="req">*</span></label>
+        <input type="text" class="form-control" id="s-title" placeholder="Brief description of the issue">
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">Category <span class="req">*</span></label>
+          <select class="form-control" id="s-category">
+            <option value="">— Select Category —</option>
+            <option>Hardware Issue</option>
+            <option>Software Issue</option>
+            <option>Access Request</option>
+            <option>Network</option>
+            <option>Other</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Urgency <span class="req">*</span></label>
+          <select class="form-control" id="s-urgency">
+            <option value="">— Select Urgency —</option>
+            <option>Low</option>
+            <option>Medium</option>
+            <option>High</option>
+            <option>Critical</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Description <span class="req">*</span></label>
+        <textarea class="form-control" id="s-desc" placeholder="Provide as much detail as possible — what happened, when, what you were doing, any error messages..."></textarea>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Device / Equipment (optional)</label>
+        <input type="text" class="form-control" id="s-device" placeholder="e.g. Lenovo 15IRH10, Serial: pf532n0">
+      </div>
+      <div style="display:flex;gap:10px;margin-top:8px;">
+        <button class="btn btn-primary" onclick="submitIncident()">&#9654; SUBMIT INCIDENT</button>
+        <button class="btn btn-outline" onclick="resetSubmitForm()">CLEAR</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Incident Detail Modal -->
+<div class="modal" id="detail-modal">
+  <div class="modal-box" style="max-width:640px;">
+    <div class="modal-header">
+      <div class="modal-title" id="detail-inc-id">INC0000</div>
+      <button class="modal-close" onclick="closeModal('detail-modal')">&times;</button>
+    </div>
+    <div class="modal-body" id="detail-body"></div>
+  </div>
+</div>
+
+<!-- Toast -->
+<div id="toast" style="position:fixed;bottom:24px;right:24px;background:var(--surface);border:1px solid var(--border);padding:12px 20px;font-family:'Share Tech Mono',monospace;font-size:11px;color:var(--text);display:none;z-index:999;clip-path:polygon(0 0,calc(100% - 6px) 0,100% 6px,100% 100%,6px 100%,0 calc(100% - 6px));"></div>
+
+<script>
+/* ── CONFIG ── */
+const CLIENT_ID='4cda57d2-0ef7-4ed4-b683-91d59c94ff86';
+const TENANT_ID='115d6eac-9c52-4e39-9c4c-f8d77ede8a9d';
+const FILE_NAME='dedale-servicedesk-data.json';
+const ADMIN_EMAIL='xerxis.dalanon@dedale.com';
+const SCOPES=['Files.ReadWrite','User.Read','Mail.Send'];
+
+/* ── STATE ── */
+let msalInstance,accessToken,currentUser,isAdmin=false;
+let incidents=[],nextIncNum=1;
+
+/* ── MSAL ── */
+async function initMsal(){
+  msalInstance=new msal.PublicClientApplication({
+    auth:{clientId:CLIENT_ID,authority:'https://login.microsoftonline.com/'+TENANT_ID,
+      redirectUri:'https://xerxisadmin.github.io/Dedale-ServiceDesk/',
+      navigateToLoginRequestUrl:false},
+    cache:{cacheLocation:'localStorage',storeAuthStateInCookie:true},
+    system:{allowNativeBroker:false}
+  });
+  await msalInstance.initialize();
+  try{const r=await msalInstance.handleRedirectPromise();if(r&&r.accessToken){accessToken=r.accessToken;currentUser=r.account;}}catch(e){}
+  if(!accessToken){
+    const accounts=msalInstance.getAllAccounts();
+    if(accounts.length>0){
+      try{const r=await msalInstance.acquireTokenSilent({scopes:SCOPES,account:accounts[0]});accessToken=r.accessToken;currentUser=r.account;}catch(e){}
+    }
+  }
+  if(accessToken&&currentUser){await onLoggedIn();}
+  else{document.getElementById('login-screen').style.display='flex';}
+}
+
+async function doLogin(){
+  try{await msalInstance.loginRedirect({scopes:SCOPES,prompt:'select_account'});}catch(e){alert('Sign-in failed: '+e.message);}
+}
+
+function doLogout(){
+  msalInstance.logoutRedirect({account:currentUser});
+}
+
+async function onLoggedIn(){
+  isAdmin=currentUser.username.toLowerCase()===ADMIN_EMAIL.toLowerCase();
+  const initials=(currentUser.name||currentUser.username).split(' ').map(n=>n[0]).join('').substring(0,2).toUpperCase();
+  document.getElementById('hdr-avatar').textContent=initials;
+  document.getElementById('hdr-name').textContent=currentUser.name||currentUser.username;
+  document.getElementById('hdr-role').textContent=isAdmin?'IT ADMIN':'STAFF';
+  document.getElementById('login-screen').style.display='none';
+  document.getElementById('header').style.display='flex';
+  document.getElementById('app').style.display='block';
+  /* Show/hide incidents tab for admin */
+  if(!isAdmin){
+    document.getElementById('tab-incidents').style.display='none';
+  }
+  await loadData();
+  renderDashboard();
+  renderIncidents();
+}
+
+/* ── DATA ── */
+async function loadData(){
+  try{
+    const r=await fetch('https://graph.microsoft.com/v1.0/me/drive/root:/'+FILE_NAME+':/content',
+      {headers:{'Authorization':'Bearer '+accessToken}});
+    if(r.ok){const d=await r.json();incidents=d.incidents||[];nextIncNum=d.nextIncNum||1;return;}
+  }catch(e){}
+  /* Try sharedWithMe */
+  try{
+    const sr=await fetch('https://graph.microsoft.com/v1.0/me/drive/sharedWithMe',
+      {headers:{'Authorization':'Bearer '+accessToken}});
+    if(sr.ok){
+      const shared=await sr.json();
+      const file=(shared.value||[]).find(function(f){return f.name===FILE_NAME;});
+      if(file){
+        const driveId=file.remoteItem?file.remoteItem.parentReference.driveId:file.parentReference.driveId;
+        const itemId=file.remoteItem?file.remoteItem.id:file.id;
+        const r2=await fetch('https://graph.microsoft.com/v1.0/drives/'+driveId+'/items/'+itemId+'/content',
+          {headers:{'Authorization':'Bearer '+accessToken}});
+        if(r2.ok){const d=await r2.json();incidents=d.incidents||[];nextIncNum=d.nextIncNum||1;return;}
+      }
+    }
+  }catch(e){}
+  incidents=[];nextIncNum=1;
+}
+
+async function saveData(){
+  const data={incidents:incidents,nextIncNum:nextIncNum,updatedAt:new Date().toISOString()};
+  try{
+    await fetch('https://graph.microsoft.com/v1.0/me/drive/root:/'+FILE_NAME+':/content',
+      {method:'PUT',headers:{'Authorization':'Bearer '+accessToken,'Content-Type':'application/json'},
+       body:JSON.stringify(data,null,2)});
+  }catch(e){console.error('Save failed',e);}
+}
+
+/* ── HELPERS ── */
+function genIncId(){
+  const id='INC'+String(nextIncNum).padStart(4,'0');
+  nextIncNum++;
+  return id;
+}
+
+function formatDate(iso){
+  if(!iso)return'—';
+  return new Date(iso).toLocaleDateString('en-PH',{month:'short',day:'numeric',year:'numeric',hour:'2-digit',minute:'2-digit'});
+}
+
+function urgencyClass(u){return u?u.toLowerCase().replace(' ','-'):'';}
+function statusClass(s){return s?s.toLowerCase().replace(' ','-'):'';}
+
+function toast(msg,dur=3000){
+  const t=document.getElementById('toast');
+  t.textContent=msg;t.style.display='block';
+  setTimeout(function(){t.style.display='none';},dur);
+}
+
+function closeModal(id){document.getElementById(id).classList.remove('open');}
+
+/* ── TABS ── */
+function showTab(name){
+  document.querySelectorAll('.tab').forEach(function(t){t.classList.remove('active');});
+  document.querySelectorAll('.view').forEach(function(v){v.classList.remove('active');});
+  document.getElementById('tab-'+name).classList.add('active');
+  document.getElementById('view-'+name).classList.add('active');
+  if(name==='dashboard')renderDashboard();
+  if(name==='incidents')renderIncidents();
+  if(name==='submit')resetSubmitForm();
+}
+
+/* ── DASHBOARD ── */
+function renderDashboard(){
+  var mine=isAdmin?incidents:incidents.filter(function(i){return i.submittedByEmail===currentUser.username;});
+  var open=mine.filter(function(i){return i.status==='Open';}).length;
+  var prog=mine.filter(function(i){return i.status==='In Progress';}).length;
+  var res=mine.filter(function(i){return i.status==='Resolved';}).length;
+  document.getElementById('stat-open').textContent=open;
+  document.getElementById('stat-progress').textContent=prog;
+  document.getElementById('stat-resolved').textContent=res;
+  document.getElementById('stat-total').textContent=mine.length;
+  /* Open badge */
+  document.getElementById('open-badge').style.display=open>0&&isAdmin?'inline-block':'none';
+  /* Recent 5 */
+  var recent=mine.slice().sort(function(a,b){return new Date(b.createdAt)-new Date(a.createdAt);}).slice(0,5);
+  var el=document.getElementById('recent-list');
+  if(!recent.length){el.innerHTML='<div class="empty-state"><div class="empty-icon">📋</div><div class="empty-title">No incidents yet</div><div class="empty-sub">Submit your first IT incident using the New Incident tab</div></div>';return;}
+  el.innerHTML=recent.map(buildIncCard).join('');
+}
+
+/* ── INCIDENTS ── */
+function renderIncidents(){
+  var mine=isAdmin?incidents:incidents.filter(function(i){return i.submittedByEmail===currentUser.username;});
+  var fs=document.getElementById('f-status')?document.getElementById('f-status').value:'';
+  var fc=document.getElementById('f-category')?document.getElementById('f-category').value:'';
+  var fu=document.getElementById('f-urgency')?document.getElementById('f-urgency').value:'';
+  var filtered=mine.filter(function(i){
+    return(!fs||i.status===fs)&&(!fc||i.category===fc)&&(!fu||i.urgency===fu);
+  }).sort(function(a,b){return new Date(b.createdAt)-new Date(a.createdAt);});
+  var el=document.getElementById('inc-list');
+  if(!filtered.length){el.innerHTML='<div class="empty-state"><div class="empty-icon">✅</div><div class="empty-title">No incidents found</div></div>';return;}
+  el.innerHTML=filtered.map(buildIncCard).join('');
+}
+
+function buildIncCard(inc){
+  var sc=statusClass(inc.status);
+  return '<div class="inc-card '+sc+'" onclick="openDetail(\''+inc.id+'\')">'
+    +'<div class="inc-top">'
+    +'<span class="inc-id">'+inc.id+'</span>'
+    +'<span class="inc-title">'+inc.title+'</span>'
+    +'<span class="badge badge-'+sc+'">'+inc.status+'</span>'
+    +'<span class="badge badge-'+urgencyClass(inc.urgency)+'">'+inc.urgency+'</span>'
+    +'</div>'
+    +'<div class="inc-meta">'
+    +'<span>📂 '+inc.category+'</span>'
+    +'<span>👤 '+inc.submittedBy+'</span>'
+    +'<span>🕐 '+formatDate(inc.createdAt)+'</span>'
+    +(inc.device?'<span>💻 '+inc.device+'</span>':'')
+    +'</div>'
+    +'</div>';
+}
+
+/* ── DETAIL ── */
+function openDetail(id){
+  var inc=incidents.find(function(i){return i.id===id;});
+  if(!inc)return;
+  document.getElementById('detail-inc-id').textContent=inc.id+' — '+inc.title;
+  var sc=statusClass(inc.status);
+  var body='<div class="detail-grid">'
+    +'<div class="detail-box"><div class="detail-label">Status</div><div class="detail-value"><span class="badge badge-'+sc+'">'+inc.status+'</span></div></div>'
+    +'<div class="detail-box"><div class="detail-label">Urgency</div><div class="detail-value"><span class="badge badge-'+urgencyClass(inc.urgency)+'">'+inc.urgency+'</span></div></div>'
+    +'<div class="detail-box"><div class="detail-label">Category</div><div class="detail-value">'+inc.category+'</div></div>'
+    +'<div class="detail-box"><div class="detail-label">Submitted By</div><div class="detail-value">'+inc.submittedBy+'</div></div>'
+    +'<div class="detail-box"><div class="detail-label">Submitted</div><div class="detail-value">'+formatDate(inc.createdAt)+'</div></div>'
+    +(inc.device?'<div class="detail-box"><div class="detail-label">Device</div><div class="detail-value">'+inc.device+'</div></div>':'')
+    +'</div>'
+    +'<div class="detail-box" style="margin-bottom:16px;"><div class="detail-label">Description</div><div class="detail-value" style="font-weight:400;font-size:13px;line-height:1.6;color:var(--text2);">'+inc.description+'</div></div>';
+
+  /* Notes */
+  if(inc.notes&&inc.notes.length){
+    body+='<div class="detail-label" style="margin-bottom:8px;">Resolution Notes</div>';
+    body+=inc.notes.map(function(n){
+      return'<div class="note-item"><div class="note-meta">'+n.by+' &mdash; '+formatDate(n.at)+'</div><div class="note-text">'+n.text+'</div></div>';
+    }).join('');
+  }
+
+  /* Admin actions */
+  if(isAdmin){
+    body+='<div class="action-row">';
+    if(inc.status==='Open')body+='<button class="btn btn-gold btn-sm" onclick="updateStatus(\''+id+'\',\'In Progress\')">▶ IN PROGRESS</button>';
+    if(inc.status!=='Resolved')body+='<button class="btn btn-success btn-sm" onclick="resolveIncident(\''+id+'\')">✓ RESOLVE</button>';
+    if(inc.status==='Resolved')body+='<button class="btn btn-outline btn-sm" onclick="updateStatus(\''+id+'\',\'Open\')">↩ REOPEN</button>';
+    body+='</div>';
+    /* Add note */
+    body+='<div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border2);">'
+      +'<div class="detail-label" style="margin-bottom:8px;">Add Note</div>'
+      +'<textarea class="form-control" id="note-input-'+id+'" placeholder="Add a resolution note or update..." style="min-height:70px;margin-bottom:8px;"></textarea>'
+      +'<button class="btn btn-outline btn-sm" onclick="addNote(\''+id+'\')">ADD NOTE</button>'
+      +'</div>';
+  }
+
+  document.getElementById('detail-body').innerHTML=body;
+  document.getElementById('detail-modal').classList.add('open');
+}
+
+async function updateStatus(id,status){
+  var idx=incidents.findIndex(function(i){return i.id===id;});
+  if(idx<0)return;
+  incidents[idx].status=status;
+  incidents[idx].updatedAt=new Date().toISOString();
+  await saveData();
+  closeModal('detail-modal');
+  renderDashboard();renderIncidents();
+  toast('Status updated to '+status);
+}
+
+async function resolveIncident(id){
+  var note=document.getElementById('note-input-'+id);
+  var noteText=note?note.value.trim():'';
+  var idx=incidents.findIndex(function(i){return i.id===id;});
+  if(idx<0)return;
+  incidents[idx].status='Resolved';
+  incidents[idx].resolvedAt=new Date().toISOString();
+  incidents[idx].updatedAt=new Date().toISOString();
+  if(noteText){
+    if(!incidents[idx].notes)incidents[idx].notes=[];
+    incidents[idx].notes.push({by:currentUser.name||currentUser.username,at:new Date().toISOString(),text:noteText});
+  }
+  await saveData();
+  /* Send resolution email to submitter */
+  await sendResolutionEmail(incidents[idx]);
+  closeModal('detail-modal');
+  renderDashboard();renderIncidents();
+  toast('Incident resolved ✓');
+}
+
+async function addNote(id){
+  var note=document.getElementById('note-input-'+id);
+  if(!note||!note.value.trim()){toast('Please enter a note.');return;}
+  var idx=incidents.findIndex(function(i){return i.id===id;});
+  if(idx<0)return;
+  if(!incidents[idx].notes)incidents[idx].notes=[];
+  incidents[idx].notes.push({by:currentUser.name||currentUser.username,at:new Date().toISOString(),text:note.value.trim()});
+  incidents[idx].updatedAt=new Date().toISOString();
+  await saveData();
+  openDetail(id);
+  toast('Note added ✓');
+}
+
+/* ── SUBMIT ── */
+function resetSubmitForm(){
+  ['s-title','s-desc','s-device'].forEach(function(id){var el=document.getElementById(id);if(el)el.value='';});
+  ['s-category','s-urgency'].forEach(function(id){var el=document.getElementById(id);if(el)el.value='';});
+}
+
+async function submitIncident(){
+  var title=document.getElementById('s-title').value.trim();
+  var category=document.getElementById('s-category').value;
+  var urgency=document.getElementById('s-urgency').value;
+  var desc=document.getElementById('s-desc').value.trim();
+  var device=document.getElementById('s-device').value.trim();
+  if(!title||!category||!urgency||!desc){toast('Please fill in all required fields.');return;}
+  var inc={
+    id:genIncId(),
+    title:title,
+    category:category,
+    urgency:urgency,
+    description:desc,
+    device:device||null,
+    status:'Open',
+    submittedBy:currentUser.name||currentUser.username,
+    submittedByEmail:currentUser.username,
+    createdAt:new Date().toISOString(),
+    updatedAt:new Date().toISOString(),
+    notes:[]
+  };
+  incidents.push(inc);
+  await saveData();
+  await sendNewIncidentEmail(inc);
+  resetSubmitForm();
+  toast(inc.id+' submitted successfully ✓');
+  showTab('dashboard');
+}
+
+/* ── EMAILS ── */
+async function sendNewIncidentEmail(inc){
+  try{
+    var urgencyColor={'Low':'#16a34a','Medium':'#ca8a04','High':'#ea580c','Critical':'#dc2626'};
+    var uColor=urgencyColor[inc.urgency]||'#374151';
+    var html='<!DOCTYPE html><html><head><meta charset="UTF-8"></head>'
+      +'<body style="margin:0;padding:0;background:#f4f4f5;font-family:Arial,sans-serif;">'
+      +'<table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f5;padding:28px 12px;">'
+      +'<tr><td align="center">'
+      +'<table width="580" cellpadding="0" cellspacing="0" style="max-width:580px;width:100%;background:#ffffff;border-radius:2px;border:1px solid #e4e4e7;">'
+      +'<tr><td style="background:#cc2244;height:4px;line-height:4px;font-size:4px;">&nbsp;</td></tr>'
+      +'<tr><td style="padding:22px 32px 18px;border-bottom:1px solid #f0f0f0;">'
+      +'<table width="100%" cellpadding="0" cellspacing="0"><tr>'
+      +'<td><div style="font-size:13px;font-weight:700;color:#18181b;letter-spacing:1px;font-family:Arial,sans-serif;">DEDALE INTELLIGENCE</div>'
+      +'<div style="font-size:11px;color:#a1a1aa;font-family:Arial,sans-serif;margin-top:2px;">IT Service Desk</div></td>'
+      +'<td align="right"><div style="font-size:11px;color:#a1a1aa;font-family:Arial,sans-serif;">New Incident</div></td>'
+      +'</tr></table></td></tr>'
+      +'<tr><td style="padding:22px 32px;border-bottom:1px solid #f0f0f0;">'
+      +'<div style="font-size:22px;font-weight:700;color:#09090b;font-family:Arial,sans-serif;margin-bottom:4px;">'+inc.id+' — '+inc.title+'</div>'
+      +'<div style="font-size:13px;color:#71717a;font-family:Arial,sans-serif;">Submitted by <strong style="color:#374151;">'+inc.submittedBy+'</strong></div>'
+      +'</td></tr>'
+      +'<tr><td style="padding:20px 32px;border-bottom:1px solid #f0f0f0;">'
+      +'<div style="font-size:11px;font-weight:700;color:#cc2244;text-transform:uppercase;letter-spacing:1.5px;font-family:Arial,sans-serif;margin-bottom:12px;">Incident Details</div>'
+      +'<table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">'
+      +'<tr style="border-top:1px solid #f4f4f5;"><td style="padding:9px 0;font-size:12px;color:#71717a;font-weight:600;width:130px;font-family:Arial,sans-serif;">Category</td>'
+      +'<td style="padding:9px 0;font-size:13px;color:#09090b;font-weight:600;font-family:Arial,sans-serif;">'+inc.category+'</td></tr>'
+      +'<tr style="border-top:1px solid #f4f4f5;"><td style="padding:9px 0;font-size:12px;color:#71717a;font-weight:600;font-family:Arial,sans-serif;">Urgency</td>'
+      +'<td style="padding:9px 0;font-size:13px;font-weight:700;font-family:Arial,sans-serif;color:'+uColor+';">'+inc.urgency+'</td></tr>'
+      +(inc.device?'<tr style="border-top:1px solid #f4f4f5;"><td style="padding:9px 0;font-size:12px;color:#71717a;font-weight:600;font-family:Arial,sans-serif;">Device</td><td style="padding:9px 0;font-size:13px;color:#374151;font-family:Arial,sans-serif;">'+inc.device+'</td></tr>':'')
+      +'</table></td></tr>'
+      +'<tr><td style="padding:20px 32px;border-bottom:1px solid #f0f0f0;">'
+      +'<div style="font-size:11px;font-weight:700;color:#cc2244;text-transform:uppercase;letter-spacing:1.5px;font-family:Arial,sans-serif;margin-bottom:8px;">Description</div>'
+      +'<div style="font-size:13px;color:#374151;font-family:Arial,sans-serif;line-height:1.6;">'+inc.description+'</div>'
+      +'</td></tr>'
+      +'<tr><td style="padding:14px 32px;">'
+      +'<table width="100%" cellpadding="0" cellspacing="0"><tr>'
+      +'<td><span style="font-size:11px;color:#a1a1aa;font-family:Arial,sans-serif;">INTEL-SD v1.0 &bull; '+new Date().toLocaleDateString('en-PH',{year:'numeric',month:'long',day:'numeric'})+'</span></td>'
+      +'<td align="right"><span style="font-size:11px;color:#a1a1aa;font-family:Arial,sans-serif;">Dedale Intelligence</span></td>'
+      +'</tr></table></td></tr>'
+      +'</table></td></tr></table></body></html>';
+    await fetch('https://graph.microsoft.com/v1.0/me/sendMail',{method:'POST',
+      headers:{'Authorization':'Bearer '+accessToken,'Content-Type':'application/json'},
+      body:JSON.stringify({message:{subject:'[IT INCIDENT] '+inc.id+' — '+inc.title,
+        body:{contentType:'HTML',content:html},
+        toRecipients:[{emailAddress:{address:ADMIN_EMAIL,name:'Xerxis Dalanon'}}]},
+        saveToSentItems:false})});
+  }catch(e){console.error('Email failed',e);}
+}
+
+async function sendResolutionEmail(inc){
+  try{
+    var html='<!DOCTYPE html><html><head><meta charset="UTF-8"></head>'
+      +'<body style="margin:0;padding:0;background:#f4f4f5;font-family:Arial,sans-serif;">'
+      +'<table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f5;padding:28px 12px;">'
+      +'<tr><td align="center">'
+      +'<table width="580" cellpadding="0" cellspacing="0" style="max-width:580px;width:100%;background:#ffffff;border-radius:2px;border:1px solid #e4e4e7;">'
+      +'<tr><td style="background:#16a34a;height:4px;line-height:4px;font-size:4px;">&nbsp;</td></tr>'
+      +'<tr><td style="padding:22px 32px 18px;border-bottom:1px solid #f0f0f0;">'
+      +'<table width="100%" cellpadding="0" cellspacing="0"><tr>'
+      +'<td><div style="font-size:13px;font-weight:700;color:#18181b;letter-spacing:1px;font-family:Arial,sans-serif;">DEDALE INTELLIGENCE</div>'
+      +'<div style="font-size:11px;color:#a1a1aa;font-family:Arial,sans-serif;margin-top:2px;">IT Service Desk</div></td>'
+      +'<td align="right"><div style="font-size:11px;color:#16a34a;font-family:Arial,sans-serif;font-weight:700;">RESOLVED</div></td>'
+      +'</tr></table></td></tr>'
+      +'<tr><td style="padding:22px 32px;border-bottom:1px solid #f0f0f0;">'
+      +'<div style="font-size:22px;font-weight:700;color:#09090b;font-family:Arial,sans-serif;margin-bottom:4px;">'+inc.id+' — Resolved</div>'
+      +'<div style="font-size:13px;color:#71717a;font-family:Arial,sans-serif;">Your incident <strong style="color:#374151;">'+inc.title+'</strong> has been resolved by IT.</div>'
+      +'</td></tr>'
+      +(inc.notes&&inc.notes.length?'<tr><td style="padding:20px 32px;border-bottom:1px solid #f0f0f0;"><div style="font-size:11px;font-weight:700;color:#16a34a;text-transform:uppercase;letter-spacing:1.5px;font-family:Arial,sans-serif;margin-bottom:8px;">Resolution Note</div><div style="font-size:13px;color:#374151;font-family:Arial,sans-serif;line-height:1.6;">'+inc.notes[inc.notes.length-1].text+'</div></td></tr>':'')
+      +'<tr><td style="padding:14px 32px;"><table width="100%" cellpadding="0" cellspacing="0"><tr>'
+      +'<td><span style="font-size:11px;color:#a1a1aa;font-family:Arial,sans-serif;">INTEL-SD v1.0</span></td>'
+      +'<td align="right"><span style="font-size:11px;color:#a1a1aa;font-family:Arial,sans-serif;">Dedale Intelligence</span></td>'
+      +'</tr></table></td></tr>'
+      +'</table></td></tr></table></body></html>';
+    await fetch('https://graph.microsoft.com/v1.0/me/sendMail',{method:'POST',
+      headers:{'Authorization':'Bearer '+accessToken,'Content-Type':'application/json'},
+      body:JSON.stringify({message:{subject:'[IT INCIDENT] '+inc.id+' — Resolved',
+        body:{contentType:'HTML',content:html},
+        toRecipients:[{emailAddress:{address:inc.submittedByEmail,name:inc.submittedBy}}]},
+        saveToSentItems:false})});
+  }catch(e){console.error('Resolution email failed',e);}
+}
+
+/* ── INIT ── */
+initMsal();
+</script>
+</body>
+</html>
