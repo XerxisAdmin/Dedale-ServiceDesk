@@ -174,6 +174,8 @@ select.form-control{cursor:pointer;}
   <div class="hdr-divider"></div>
   <div class="hdr-title">INTEL-SD v1.0</div>
   <div class="hdr-right">
+    <span id="sd-sync-status" style="font-size:11px;font-family:'Share Tech Mono',monospace;color:var(--text3)"></span>
+    <div id="sd-connection-status" style="display:flex;align-items:center;gap:5px;font-size:10px;font-family:'Share Tech Mono',monospace;letter-spacing:1px;"><span id="sd-connection-dot" style="width:8px;height:8px;border-radius:50%;background:#22cc88;box-shadow:0 0 6px #22cc88;flex-shrink:0;"></span><span id="sd-connection-label" style="color:var(--text3)">ONLINE</span></div>
     <div class="user-badge">
       <div class="user-avatar" id="hdr-avatar">XD</div>
       <div>
@@ -329,6 +331,24 @@ const SCOPES=['Files.ReadWrite','User.Read','Mail.Send'];
 let msalInstance,accessToken,currentUser,isAdmin=false;
 let incidents=[],nextIncNum=1;
 
+/* ── SYNC STATUS ── */
+function updateSyncStatus(s){
+  var el=document.getElementById('sd-sync-status');if(!el)return;
+  if(s==='syncing')el.innerHTML='<span style="color:var(--gold);font-size:11px">Syncing...</span>';
+  else if(s==='saved')el.innerHTML='<span style="color:#0f7a55;font-size:11px;display:flex;align-items:center;gap:5px"><svg width="12" height="12" fill="none" stroke="#0f7a55" stroke-width="2" viewBox="0 0 24 24"><polyline points="20,6 9,17 4,12"/></svg> Data saved</span>';
+  else if(s==='error')el.innerHTML='<span style="color:var(--crimson);font-size:11px">Sync error</span>';
+  else if(s==='offline')el.innerHTML='<span style="color:var(--crimson);font-size:11px">Offline</span>';
+  else el.innerHTML='<span style="color:#0f7a55;font-size:11px;display:flex;align-items:center;gap:5px"><svg width="12" height="12" fill="none" stroke="#0f7a55" stroke-width="2" viewBox="0 0 24 24"><polyline points="20,6 9,17 4,12"/></svg> Data saved</span>';
+}
+function updateOnlineUI(online){
+  var dot=document.getElementById('sd-connection-dot');
+  var lbl=document.getElementById('sd-connection-label');
+  if(dot){dot.style.background=online?'#22cc88':'#cc2244';dot.style.boxShadow=online?'0 0 6px #22cc88':'0 0 6px #cc2244';}
+  if(lbl){lbl.textContent=online?'ONLINE':'OFFLINE';lbl.style.color=online?'#22cc88':'#cc2244';}
+}
+window.addEventListener('online',function(){updateOnlineUI(true);});
+window.addEventListener('offline',function(){updateOnlineUI(false);});
+
 /* ── MSAL ── */
 async function initMsal(){
   msalInstance=new msal.PublicClientApplication({
@@ -372,6 +392,8 @@ async function onLoggedIn(){
     document.getElementById('tab-incidents').style.display='none';
   }
   await loadData();
+  updateOnlineUI(true);
+  updateSyncStatus('connected');
   renderDashboard();
   renderIncidents();
 }
@@ -388,11 +410,14 @@ async function loadData(){
 
 async function saveData(){
   const data={incidents:incidents,nextIncNum:nextIncNum,updatedAt:new Date().toISOString()};
+  updateSyncStatus('syncing');
   try{
-    await fetch('https://graph.microsoft.com/v1.0/drives/'+ADMIN_DRIVE_ID+'/root:/'+FILE_NAME+':/content',
+    const r=await fetch('https://graph.microsoft.com/v1.0/drives/'+ADMIN_DRIVE_ID+'/root:/'+FILE_NAME+':/content',
       {method:'PUT',headers:{'Authorization':'Bearer '+accessToken,'Content-Type':'application/json'},
        body:JSON.stringify(data,null,2)});
-  }catch(e){console.error('Save failed',e);}
+    if(r.ok){updateSyncStatus('saved');updateOnlineUI(true);setTimeout(function(){updateSyncStatus('connected');},2500);}
+    else{updateSyncStatus('error');}
+  }catch(e){console.error('Save failed',e);updateSyncStatus('offline');updateOnlineUI(false);}
 }
 
 /* ── HELPERS ── */
