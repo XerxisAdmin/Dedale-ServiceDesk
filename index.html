@@ -401,6 +401,7 @@ async function onLoggedIn(){
   updateSyncStatus('connected');
   renderDashboard();
   renderIncidents();
+  startAutoRefresh();
 }
 
 /* ── DATA ── */
@@ -423,6 +424,58 @@ async function saveData(){
     if(r.ok){updateSyncStatus('saved');updateOnlineUI(true);setTimeout(function(){updateSyncStatus('connected');},2500);}
     else{updateSyncStatus('error');}
   }catch(e){console.error('Save failed',e);updateSyncStatus('offline');updateOnlineUI(false);}
+}
+
+/* ── AUTO-REFRESH ── */
+var _autoRefreshInterval=null;
+var _autoRefreshSecs=15;
+var _isRefreshing=false;
+
+function startAutoRefresh(){
+  if(_autoRefreshInterval)clearInterval(_autoRefreshInterval);
+  _autoRefreshInterval=setInterval(autoRefreshTick,_autoRefreshSecs*1000);
+  console.log('[AutoRefresh] Started — every '+_autoRefreshSecs+'s');
+  updateRefreshIndicator();
+}
+
+async function autoRefreshTick(){
+  if(_isRefreshing)return;
+  _isRefreshing=true;
+  try{
+    /* Silently reload data from OneDrive */
+    const r=await fetch('https://graph.microsoft.com/v1.0/drives/'+ADMIN_DRIVE_ID+'/root:/'+FILE_NAME+':/content',
+      {headers:{'Authorization':'Bearer '+accessToken}});
+    if(r.ok){
+      const d=await r.json();
+      var prevCount=incidents.length;
+      incidents=d.incidents||[];
+      nextIncNum=d.nextIncNum||1;
+      renderDashboard();
+      renderIncidents();
+      /* Show toast if new ticket arrived */
+      if(isAdmin&&incidents.length>prevCount){
+        var diff=incidents.length-prevCount;
+        toast('🔔 '+diff+' new ticket'+(diff>1?'s':'')+' received');
+      }
+      updateRefreshIndicator(true);
+    }
+  }catch(e){
+    console.warn('[AutoRefresh] Failed:',e);
+    updateRefreshIndicator(false);
+  }
+  _isRefreshing=false;
+}
+
+function updateRefreshIndicator(ok){
+  var el=document.getElementById('sd-sync-status');
+  if(!el)return;
+  if(ok===undefined)return;
+  /* Briefly flash indicator green on successful refresh */
+  if(ok){
+    var orig=el.innerHTML;
+    el.innerHTML='<span style="color:var(--green);font-family:Share Tech Mono,monospace;font-size:10px;letter-spacing:1px;">⟳ Refreshed</span>';
+    setTimeout(function(){updateSyncStatus('connected');},1500);
+  }
 }
 
 /* ── HELPERS ── */
