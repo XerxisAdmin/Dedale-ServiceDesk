@@ -328,7 +328,7 @@ const TENANT_ID='115d6eac-9c52-4e39-9c4c-f8d77ede8a9d';
 const FILE_NAME='dedale-servicedesk-data.json';
 const ADMIN_DRIVE_ID='b!JJGdEs4axkKFpdu0ZTYTO_7UT8rCzcFLjfdSqHtuqczk_Sy9CC9jTqYSgnfFkEuR';
 const ADMIN_EMAIL='xerxis.dalanon@dedale.com';
-const SCOPES=['Files.ReadWrite','Files.ReadWrite.All','User.Read','Mail.Send'];
+const SCOPES=['Files.ReadWrite','Files.ReadWrite.All','User.Read','User.Read.All','Mail.Send'];
 
 /* ── STATE ── */
 let msalInstance,accessToken,currentUser,isAdmin=false;
@@ -366,7 +366,17 @@ async function initMsal(){
   if(!accessToken){
     const accounts=msalInstance.getAllAccounts();
     if(accounts.length>0){
-      try{const r=await msalInstance.acquireTokenSilent({scopes:SCOPES,account:accounts[0]});accessToken=r.accessToken;currentUser=r.account;}catch(e){}
+      try{
+        /* Force fresh token with latest scopes */
+        const r=await msalInstance.acquireTokenSilent({scopes:SCOPES,account:accounts[0],forceRefresh:true});
+        accessToken=r.accessToken;currentUser=r.account;
+      }catch(e){
+        try{
+          /* Silent failed — try popup to get new scopes without full logout */
+          const r=await msalInstance.acquireTokenPopup({scopes:SCOPES,account:accounts[0]});
+          accessToken=r.accessToken;currentUser=r.account;
+        }catch(e2){}
+      }
     }
   }
   if(accessToken&&currentUser){await onLoggedIn();}
@@ -407,26 +417,69 @@ async function onLoggedIn(){
 /* ── DATA ── */
 async function loadData(){
   try{
-    const r=await fetch('https://graph.microsoft.com/v1.0/shares/u!aHR0cHM6Ly9zb2Z0d2FyZWNsdWItbXkuc2hhcmVwb2ludC5jb20vOnU6L2cvcGVyc29uYWwveGVyeGlzX2RhbGFub25fZGVkYWxlX2NvbS9JUUJzZmNvSW4yWVBUYTZUM2w1bHJETXpBVVZIQjljRk9rOHdRbF9BMGFHN1hObz9lPXZhNlNjeA/root/content',
-      {headers:{'Authorization':'Bearer '+accessToken}});
-    if(r.ok){const d=await r.json();incidents=d.incidents||[];nextIncNum=d.nextIncNum||1;return;}
-    console.warn('[LoadData] Status:',r.status);
+    if(isAdmin){
+      /* Admin: load from own file first, then aggregate from all users */
+      await loadAdminData();
+    }else{
+      /* Staff: load only their own tickets */
+      const r=await fetch('https://graph.microsoft.com/v1.0/me/drive/root:/dedale-sd-tickets.json:/content',
+        {headers:{'Authorization':'Bearer '+accessToken}});
+      if(r.ok){const d=await r.json();incidents=d.incidents||[];nextIncNum=d.nextIncNum||1;return;}
+      if(r.status===404){incidents=[];nextIncNum=1;return;}
+    }
   }catch(e){console.error('loadData failed',e);}
-  incidents=[];nextIncNum=1;
+  if(!isAdmin){incidents=[];nextIncNum=1;}
+}
+
+async function loadAdminData(){
+  var allIncidents=[];
+  var maxNum=nextIncNum||1;
+  /* Load admin's own file */
+  try{
+    const r=await fetch('https://graph.microsoft.com/v1.0/me/drive/root:/dedale-sd-tickets.json:/content',
+      {headers:{'Authorization':'Bearer '+accessToken}});
+    if(r.ok){const d=await r.json();allIncidents=allIncidents.concat(d.incidents||[]);maxNum=Math.max(maxNum,d.nextIncNum||1);}
+  }catch(e){}
+  /* Read all org users' drives using admin Files.ReadWrite.All permission */
+  try{
+    const users=await fetch('https://graph.microsoft.com/v1.0/users?$select=userPrincipalName&$top=200',
+      {headers:{'Authorization':'Bearer '+accessToken}});
+    if(users.ok){
+      const ud=await users.json();
+      const userList=(ud.value||[]).filter(function(u){
+        return u.userPrincipalName&&u.userPrincipalName.toLowerCase()!==currentUser.username.toLowerCase();
+      });
+      for(var i=0;i<userList.length;i++){
+        try{
+          const fr=await fetch('https://graph.microsoft.com/v1.0/users/'+encodeURIComponent(userList[i].userPrincipalName)+'/drive/root:/dedale-sd-tickets.json:/content',
+            {headers:{'Authorization':'Bearer '+accessToken}});
+          if(fr.ok){
+            const d=await fr.json();
+            if(d.incidents)allIncidents=allIncidents.concat(d.incidents);
+            maxNum=Math.max(maxNum,d.nextIncNum||1);
+          }
+        }catch(e){}
+      }
+    }
+  }catch(e){console.warn('[AdminLoad] Users fetch failed:',e);}
+  /* Deduplicate and sort newest first */
+  var seen={};
+  incidents=allIncidents.filter(function(i){if(!i||!i.id||seen[i.id])return false;seen[i.id]=true;return true;});
+  incidents.sort(function(a,b){return new Date(b.createdAt)-new Date(a.createdAt);});
+  nextIncNum=maxNum;
 }
 
 async function saveData(){
-  const data={incidents:incidents,nextIncNum:nextIncNum,updatedAt:new Date().toISOString()};
   updateSyncStatus('syncing');
   try{
-    const r=await fetch('https://graph.microsoft.com/v1.0/shares/u!aHR0cHM6Ly9zb2Z0d2FyZWNsdWItbXkuc2hhcmVwb2ludC5jb20vOnU6L2cvcGVyc29uYWwveGVyeGlzX2RhbGFub25fZGVkYWxlX2NvbS9JUUJzZmNvSW4yWVBUYTZUM2w1bHJETXpBVVZIQjljRk9rOHdRbF9BMGFHN1hObz9lPXZhNlNjeA/root/content',
+    /* Each user saves their own tickets to their own OneDrive */
+    var myTickets=isAdmin?incidents:incidents.filter(function(i){return i.submittedByEmail===currentUser.username;});
+    var data={incidents:myTickets,nextIncNum:nextIncNum,updatedAt:new Date().toISOString(),owner:currentUser.username};
+    const r=await fetch('https://graph.microsoft.com/v1.0/me/drive/root:/dedale-sd-tickets.json:/content',
       {method:'PUT',headers:{'Authorization':'Bearer '+accessToken,'Content-Type':'application/json'},
        body:JSON.stringify(data,null,2)});
     if(r.ok){updateSyncStatus('saved');updateOnlineUI(true);setTimeout(function(){updateSyncStatus('connected');},2500);}
-    else{
-      console.error('[SaveData] Error:',r.status);
-      updateSyncStatus('error');
-    }
+    else{console.error('[SaveData] Error:',r.status);updateSyncStatus('error');}
   }catch(e){console.error('Save failed',e);updateSyncStatus('offline');updateOnlineUI(false);}
 }
 
@@ -447,7 +500,9 @@ async function autoRefreshTick(){
   _isRefreshing=true;
   try{
     /* Silently reload data from OneDrive */
-    const r=await fetch('https://graph.microsoft.com/v1.0/shares/u!aHR0cHM6Ly9zb2Z0d2FyZWNsdWItbXkuc2hhcmVwb2ludC5jb20vOnU6L2cvcGVyc29uYWwveGVyeGlzX2RhbGFub25fZGVkYWxlX2NvbS9JUUJzZmNvSW4yWVBUYTZUM2w1bHJETXpBVVZIQjljRk9rOHdRbF9BMGFHN1hObz9lPXZhNlNjeA/root/content',
+    /* Admin refresh — reload all users data */
+    if(isAdmin){await loadAdminData();return;}
+    const r=await fetch('https://graph.microsoft.com/v1.0/me/drive/root:/dedale-sd-tickets.json:/content',
       {headers:{'Authorization':'Bearer '+accessToken}});
     if(r.ok){
       const d=await r.json();
