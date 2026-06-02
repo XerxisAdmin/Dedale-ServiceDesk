@@ -441,7 +441,7 @@ async function loadStaffData(){
   /* Staff: show tickets they submitted — read from their own sent items */
   try{
     const r=await fetch(
-      'https://graph.microsoft.com/v1.0/me/mailFolders/SentItems/messages?$filter=contains(subject,%27%5BIT+INCIDENT%5D%27)&$top=100&$select=subject,body,receivedDateTime&$orderby=lastModifiedDateTime%20desc',
+      'https://graph.microsoft.com/v1.0/me/mailFolders/SentItems/messages?$search=%22subject:IT%20INCIDENT%22&$top=100&$select=subject,body,receivedDateTime',
       {headers:{'Authorization':'Bearer '+accessToken}}
     );
     if(r.ok){
@@ -478,7 +478,7 @@ async function loadAdminData(){
   /* Step 2: read admin inbox for all [IT INCIDENT] emails from staff */
   try{
     const r=await fetch(
-      'https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages?$filter=contains(subject,%27%5BIT+INCIDENT%5D%27)&$top=200&$select=subject,body,receivedDateTime&$orderby=lastModifiedDateTime%20desc',
+      'https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages?$search=%22subject:IT%20INCIDENT%22&$top=200&$select=subject,body,receivedDateTime',
       {headers:{'Authorization':'Bearer '+accessToken}}
     );
     if(r.ok){
