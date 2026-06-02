@@ -595,7 +595,6 @@ async function autoRefreshTick(){
       toast('🔔 '+diff+' new ticket'+(diff>1?'s':'')+' received');
     }
     updateRefreshIndicator(true);
-    }
   }catch(e){
     console.warn('[AutoRefresh] Failed:',e);
     updateRefreshIndicator(false);
