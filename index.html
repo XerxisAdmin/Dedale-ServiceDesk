@@ -407,9 +407,10 @@ async function onLoggedIn(){
 /* ── DATA ── */
 async function loadData(){
   try{
-    const r=await fetch('https://graph.microsoft.com/v1.0/drives/'+ADMIN_DRIVE_ID+'/root:/'+FILE_NAME+':/content',
+    const r=await fetch('https://graph.microsoft.com/v1.0/shares/u!aHR0cHM6Ly9zb2Z0d2FyZWNsdWItbXkuc2hhcmVwb2ludC5jb20vOnU6L2cvcGVyc29uYWwveGVyeGlzX2RhbGFub25fZGVkYWxlX2NvbS9JUUJzZmNvSW4yWVBUYTZUM2w1bHJETXpBVVZIQjljRk9rOHdRbF9BMGFHN1hObz9lPXZhNlNjeA/root/content',
       {headers:{'Authorization':'Bearer '+accessToken}});
     if(r.ok){const d=await r.json();incidents=d.incidents||[];nextIncNum=d.nextIncNum||1;return;}
+    console.warn('[LoadData] Status:',r.status);
   }catch(e){console.error('loadData failed',e);}
   incidents=[];nextIncNum=1;
 }
@@ -418,11 +419,14 @@ async function saveData(){
   const data={incidents:incidents,nextIncNum:nextIncNum,updatedAt:new Date().toISOString()};
   updateSyncStatus('syncing');
   try{
-    const r=await fetch('https://graph.microsoft.com/v1.0/drives/'+ADMIN_DRIVE_ID+'/root:/'+FILE_NAME+':/content',
+    const r=await fetch('https://graph.microsoft.com/v1.0/shares/u!aHR0cHM6Ly9zb2Z0d2FyZWNsdWItbXkuc2hhcmVwb2ludC5jb20vOnU6L2cvcGVyc29uYWwveGVyeGlzX2RhbGFub25fZGVkYWxlX2NvbS9JUUJzZmNvSW4yWVBUYTZUM2w1bHJETXpBVVZIQjljRk9rOHdRbF9BMGFHN1hObz9lPXZhNlNjeA/root/content',
       {method:'PUT',headers:{'Authorization':'Bearer '+accessToken,'Content-Type':'application/json'},
        body:JSON.stringify(data,null,2)});
     if(r.ok){updateSyncStatus('saved');updateOnlineUI(true);setTimeout(function(){updateSyncStatus('connected');},2500);}
-    else{updateSyncStatus('error');}
+    else{
+      console.error('[SaveData] Error:',r.status);
+      updateSyncStatus('error');
+    }
   }catch(e){console.error('Save failed',e);updateSyncStatus('offline');updateOnlineUI(false);}
 }
 
@@ -443,7 +447,7 @@ async function autoRefreshTick(){
   _isRefreshing=true;
   try{
     /* Silently reload data from OneDrive */
-    const r=await fetch('https://graph.microsoft.com/v1.0/drives/'+ADMIN_DRIVE_ID+'/root:/'+FILE_NAME+':/content',
+    const r=await fetch('https://graph.microsoft.com/v1.0/shares/u!aHR0cHM6Ly9zb2Z0d2FyZWNsdWItbXkuc2hhcmVwb2ludC5jb20vOnU6L2cvcGVyc29uYWwveGVyeGlzX2RhbGFub25fZGVkYWxlX2NvbS9JUUJzZmNvSW4yWVBUYTZUM2w1bHJETXpBVVZIQjljRk9rOHdRbF9BMGFHN1hObz9lPXZhNlNjeA/root/content',
       {headers:{'Authorization':'Bearer '+accessToken}});
     if(r.ok){
       const d=await r.json();
