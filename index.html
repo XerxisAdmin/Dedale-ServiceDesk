@@ -454,7 +454,7 @@ async function loadAdminData(){
   /* Read inbox for IT incident emails and extract embedded ticket data */
   try{
     const mailR=await fetch(
-      "https://graph.microsoft.com/v1.0/me/messages?$search="subject:[IT INCIDENT]"&$top=100&$select=subject,body,receivedDateTime",
+      "https://graph.microsoft.com/v1.0/me/messages?$search=%22subject:[IT INCIDENT]%22&$top=100&$select=subject,body,receivedDateTime",
       {headers:{'Authorization':'Bearer '+accessToken}}
     );
     if(mailR.ok){
