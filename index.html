@@ -434,38 +434,54 @@ async function loadData(){
 async function loadAdminData(){
   var allIncidents=[];
   var maxNum=nextIncNum||1;
-  /* Load admin's own file */
+
+  /* Load admin's own tickets from their own OneDrive */
   try{
     const r=await fetch('https://graph.microsoft.com/v1.0/me/drive/root:/dedale-sd-tickets.json:/content',
       {headers:{'Authorization':'Bearer '+accessToken}});
-    if(r.ok){const d=await r.json();allIncidents=allIncidents.concat(d.incidents||[]);maxNum=Math.max(maxNum,d.nextIncNum||1);}
+    if(r.ok){
+      const d=await r.json();
+      allIncidents=allIncidents.concat(d.incidents||[]);
+      maxNum=Math.max(maxNum,d.nextIncNum||1);
+    }
   }catch(e){}
-  /* Read all org users' drives using admin Files.ReadWrite.All permission */
+
+  /* Read inbox for IT incident emails and extract embedded ticket data */
   try{
-    const users=await fetch('https://graph.microsoft.com/v1.0/users?$select=userPrincipalName&$top=200',
-      {headers:{'Authorization':'Bearer '+accessToken}});
-    if(users.ok){
-      const ud=await users.json();
-      const userList=(ud.value||[]).filter(function(u){
-        return u.userPrincipalName&&u.userPrincipalName.toLowerCase()!==currentUser.username.toLowerCase();
-      });
-      for(var i=0;i<userList.length;i++){
+    const mailR=await fetch(
+      "https://graph.microsoft.com/v1.0/me/messages?$filter=startswith(subject,'[IT INCIDENT]')&$top=100&$select=subject,body,receivedDateTime&$orderby=receivedDateTime desc",
+      {headers:{'Authorization':'Bearer '+accessToken}}
+    );
+    if(mailR.ok){
+      const mailData=await mailR.json();
+      const messages=mailData.value||[];
+      messages.forEach(function(msg){
         try{
-          const fr=await fetch('https://graph.microsoft.com/v1.0/users/'+encodeURIComponent(userList[i].userPrincipalName)+'/drive/root:/dedale-sd-tickets.json:/content',
-            {headers:{'Authorization':'Bearer '+accessToken}});
-          if(fr.ok){
-            const d=await fr.json();
-            if(d.incidents)allIncidents=allIncidents.concat(d.incidents);
-            maxNum=Math.max(maxNum,d.nextIncNum||1);
+          var bodyContent=msg.body.content||'';
+          var match=bodyContent.match(/<!-- TICKET_DATA:([^-]+)-->/);
+          if(match&&match[1]){
+            var ticket=JSON.parse(atob(match[1]));
+            if(ticket&&ticket.id)allIncidents.push(ticket);
           }
         }catch(e){}
-      }
+      });
     }
-  }catch(e){console.warn('[AdminLoad] Users fetch failed:',e);}
-  /* Deduplicate and sort newest first */
+  }catch(e){console.warn('[AdminLoad] Mail read failed:',e);}
+
+  /* Deduplicate by id — keep latest version */
   var seen={};
-  incidents=allIncidents.filter(function(i){if(!i||!i.id||seen[i.id])return false;seen[i.id]=true;return true;});
-  incidents.sort(function(a,b){return new Date(b.createdAt)-new Date(a.createdAt);});
+  var deduped=[];
+  allIncidents.forEach(function(i){
+    if(!i||!i.id)return;
+    if(!seen[i.id]){seen[i.id]=true;deduped.push(i);}
+  });
+  deduped.sort(function(a,b){return new Date(b.createdAt)-new Date(a.createdAt);});
+  incidents=deduped;
+
+  /* Set next INC number */
+  deduped.forEach(function(i){
+    if(i.id){var n=parseInt(i.id.replace('INC',''),10);if(!isNaN(n))maxNum=Math.max(maxNum,n+1);}
+  });
   nextIncNum=maxNum;
 }
 
@@ -810,9 +826,9 @@ async function sendNewIncidentEmail(inc){
     await fetch('https://graph.microsoft.com/v1.0/me/sendMail',{method:'POST',
       headers:{'Authorization':'Bearer '+accessToken,'Content-Type':'application/json'},
       body:JSON.stringify({message:{subject:'[IT INCIDENT] '+inc.id+' — '+inc.title,
-        body:{contentType:'HTML',content:html},
+        body:{contentType:'HTML',content:html+'<!-- SD:'+btoa(unescape(encodeURIComponent(JSON.stringify(inc))))+'-->'},
         toRecipients:[{emailAddress:{address:ADMIN_EMAIL,name:'Xerxis Dalanon'}}]},
-        saveToSentItems:false})});
+        saveToSentItems:true})});
   }catch(e){console.error('Email failed',e);}
 }
 
