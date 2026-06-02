@@ -443,13 +443,18 @@ async function loadAdminData(){
       const d=await r.json();
       allIncidents=allIncidents.concat(d.incidents||[]);
       maxNum=Math.max(maxNum,d.nextIncNum||1);
+    }else if(r.status===404){
+      /* File doesn't exist yet — create empty one */
+      await fetch('https://graph.microsoft.com/v1.0/me/drive/root:/dedale-sd-tickets.json:/content',
+        {method:'PUT',headers:{'Authorization':'Bearer '+accessToken,'Content-Type':'application/json'},
+         body:JSON.stringify({incidents:[],nextIncNum:1,owner:currentUser.username})});
     }
   }catch(e){}
 
   /* Read inbox for IT incident emails and extract embedded ticket data */
   try{
     const mailR=await fetch(
-      "https://graph.microsoft.com/v1.0/me/messages?$filter=startswith(subject,'[IT INCIDENT]')&$top=100&$select=subject,body,receivedDateTime&$orderby=receivedDateTime desc",
+      "https://graph.microsoft.com/v1.0/me/messages?$search="subject:[IT INCIDENT]"&$top=100&$select=subject,body,receivedDateTime",
       {headers:{'Authorization':'Bearer '+accessToken}}
     );
     if(mailR.ok){
