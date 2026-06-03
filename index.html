@@ -519,23 +519,49 @@ async function loadAdminData(){
 }
 
 async function loadStaffData(){
-  /* Staff: read from admin OneDrive, show only own tickets */
+  /* Staff: read own tickets from sent items attachments */
   try{
-    const r=await fetch(SHARED_FILE_URL,
+    const r=await fetch(
+      'https://graph.microsoft.com/v1.0/me/mailFolders/SentItems/messages?$search=%22subject:IT%20INCIDENT%22&$top=100&$select=id,subject,receivedDateTime',
       {headers:{'Authorization':'Bearer '+accessToken}}
     );
     if(r.ok){
       const d=await r.json();
-      var all=d.incidents||[];
-      var mine=all.filter(function(i){return i&&i.submittedByEmail===currentUser.username;});
-      mine.sort(function(a,b){return new Date(b.createdAt)-new Date(a.createdAt);});
-      incidents=mine;
-      console.log('[Staff] Loaded',mine.length,'own tickets via shared URL');
-    }else if(r.status===404){
-      incidents=[];
-    }else{
-      console.error('[Staff] Read failed:',r.status);
-      incidents=[];
+      var msgs=d.value||[];
+      var found=[];
+      for(var i=0;i<msgs.length;i++){
+        try{
+          var ar=await fetch(
+            'https://graph.microsoft.com/v1.0/me/messages/'+msgs[i].id+'/attachments',
+            {headers:{'Authorization':'Bearer '+accessToken}}
+          );
+          if(!ar.ok)continue;
+          var ad=await ar.json();
+          (ad.value||[]).forEach(function(att){
+            if(att.name&&att.name.startsWith('ticket-')&&att.name.endsWith('.json')){
+              try{
+                var inc=JSON.parse(decodeURIComponent(escape(atob(att.contentBytes))));
+                if(inc&&inc.id&&inc.submittedByEmail===currentUser.username)found.push(inc);
+              }catch(e){}
+            }
+          });
+        }catch(e){}
+      }
+      /* Dedup by id — keep latest */
+      var byId={};
+      found.forEach(function(i){
+        if(!i||!i.id)return;
+        if(!byId[i.id]){byId[i.id]=i;}
+        else{
+          var a=new Date(byId[i.id].updatedAt||byId[i.id].createdAt||0);
+          var b=new Date(i.updatedAt||i.createdAt||0);
+          if(b>a)byId[i.id]=i;
+        }
+      });
+      var deduped=Object.values(byId);
+      deduped.sort(function(a,b){return new Date(b.createdAt)-new Date(a.createdAt);});
+      incidents=deduped;
+      console.log('[Staff] Loaded',deduped.length,'own tickets from sent items');
     }
   }catch(e){console.error('[Staff] loadStaffData error',e);incidents=[];}
 }
@@ -912,46 +938,8 @@ async function submitIncident(){
     updatedAt:new Date().toISOString(),
     notes:[]
   };
-  if(isAdmin){
-    /* Admin: just push and save */
-    incidents.push(inc);
-    await saveData();
-  }else{
-    /* Staff: load full admin file, append ticket, save back to ADMIN_DRIVE_ID */
-    try{
-      var allInc=[];
-      var allNext=1;
-      var allCleared=[];
-      const loadR=await fetch(SHARED_FILE_URL,
-        {headers:{'Authorization':'Bearer '+accessToken}}
-      );
-      if(loadR.ok){
-        const ld=await loadR.json();
-        allInc=ld.incidents||[];
-        allNext=ld.nextIncNum||1;
-        allCleared=ld.clearedIds||[];
-      }
-      allInc.push(inc);
-      var saveR=await fetch(
-        SHARED_FILE_URL,
-        {method:'PUT',
-         headers:{'Authorization':'Bearer '+accessToken,'Content-Type':'application/json'},
-         body:JSON.stringify({incidents:allInc,nextIncNum:Math.max(allNext,nextIncNum),clearedIds:allCleared,updatedAt:new Date().toISOString()},null,2)}
-      );
-      if(saveR.ok){
-        console.log('[Staff] Ticket saved to admin OneDrive');
-        incidents.push(inc);
-      }else{
-        console.error('[Staff] Save failed:',saveR.status);
-        toast('Submission failed. Please try again.');
-        return;
-      }
-    }catch(e){
-      console.error('[Staff] Submit error:',e);
-      toast('Submission failed. Please try again.');
-      return;
-    }
-  }
+  incidents.push(inc);
+  if(isAdmin){await saveData();}
   await sendNewIncidentEmail(inc);
   resetSubmitForm();
   toast(inc.id+' submitted successfully ✓');
