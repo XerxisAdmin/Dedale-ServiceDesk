@@ -679,10 +679,12 @@ async function updateStatus(id,status,techName){
     incidents[idx].assignedTo=null;
     incidents[idx].assignedAt=null;
   }
-  await saveOneIncident(incidents[idx]);
-  /* Send status update email to submitter (skip if admin updating their own ticket) */
-  if(incidents[idx].submittedByEmail && incidents[idx].submittedByEmail !== ADMIN_EMAIL){
-    await sendStatusUpdateEmail(incidents[idx], status);
+  /* Save a copy BEFORE async save — idx may shift after reload */
+  var incCopy=JSON.parse(JSON.stringify(incidents[idx]));
+  await saveOneIncident(incCopy);
+  /* Send status update email using the saved copy */
+  if(incCopy.submittedByEmail && incCopy.submittedByEmail !== ADMIN_EMAIL){
+    await sendStatusUpdateEmail(incCopy, status);
   }
   closeModal('detail-modal');
   renderDashboard();renderIncidents();
