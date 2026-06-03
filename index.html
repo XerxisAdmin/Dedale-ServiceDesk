@@ -680,6 +680,10 @@ async function updateStatus(id,status,techName){
     incidents[idx].assignedAt=null;
   }
   await saveOneIncident(incidents[idx]);
+  /* Send status update email to submitter (skip if admin updating their own ticket) */
+  if(incidents[idx].submittedByEmail && incidents[idx].submittedByEmail !== ADMIN_EMAIL){
+    await sendStatusUpdateEmail(incidents[idx], status);
+  }
   closeModal('detail-modal');
   renderDashboard();renderIncidents();
   toast('Status updated to '+status);
@@ -748,28 +752,7 @@ async function executeClearAll(){
     }
   }catch(e){console.warn('[Clear] Inbox delete failed',e);}
 
-  /* Step 2: wipe OneDrive file */
-  var staffEmails=[];
-  incidents.forEach(function(i){
-    if(i&&i.submittedByEmail&&i.submittedByEmail!==ADMIN_EMAIL&&staffEmails.indexOf(i.submittedByEmail)===-1){
-      staffEmails.push(i.submittedByEmail);
-    }
-  });
-  var clearTs=new Date().toISOString();
-  for(var s=0;s<staffEmails.length;s++){
-    try{
-      await fetch('https://graph.microsoft.com/v1.0/me/sendMail',{method:'POST',
-        headers:{'Authorization':'Bearer '+accessToken,'Content-Type':'application/json'},
-        body:JSON.stringify({message:{
-          subject:'[SD CLEAR] '+clearTs,
-          body:{contentType:'Text',content:'IT Service Desk logs cleared by admin.'},
-          toRecipients:[{emailAddress:{address:staffEmails[s]}}]
-        },saveToSentItems:false})});
-      console.log('[Clear] Sent clear command to',staffEmails[s]);
-    }catch(e){}
-  }
-
-  /* Step 3: wipe OneDrive file */
+  /* Step 2: wipe SharePoint file */
   clearedIds=[];
   incidents=[];
   nextIncNum=1;
@@ -935,6 +918,51 @@ async function sendNewIncidentEmail(inc){
         }]},
         saveToSentItems:true})});
   }catch(e){console.error('Email failed',e);}
+}
+
+async function sendStatusUpdateEmail(inc, newStatus){
+  try{
+    var statusColor={'Open':'#16a34a','In Progress':'#ca8a04','Resolved':'#2563eb'};
+    var sColor=statusColor[newStatus]||'#374151';
+    var html='<!DOCTYPE html><html><head><meta charset="UTF-8"></head>'
+      +'<body style="margin:0;padding:0;background:#f4f4f5;font-family:Arial,sans-serif;">'
+      +'<table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f5;padding:28px 12px;">'
+      +'<tr><td align="center">'
+      +'<table width="580" cellpadding="0" cellspacing="0" style="max-width:580px;width:100%;background:#ffffff;border-radius:2px;border:1px solid #e4e4e7;">'
+      +'<tr><td style="background:#cc2244;height:4px;line-height:4px;font-size:4px;">&nbsp;</td></tr>'
+      +'<tr><td style="padding:22px 32px 18px;border-bottom:1px solid #f0f0f0;">'
+      +'<table width="100%" cellpadding="0" cellspacing="0"><tr>'
+      +'<td><div style="font-size:13px;font-weight:700;color:#18181b;letter-spacing:1px;font-family:Arial,sans-serif;">DEDALE INTELLIGENCE</div>'
+      +'<div style="font-size:11px;color:#a1a1aa;font-family:Arial,sans-serif;margin-top:2px;">IT Service Desk</div></td>'
+      +'<td align="right"><div style="font-size:11px;color:#a1a1aa;font-family:Arial,sans-serif;">Ticket Update</div></td>'
+      +'</tr></table></td></tr>'
+      +'<tr><td style="padding:22px 32px;border-bottom:1px solid #f0f0f0;">'
+      +'<div style="font-size:22px;font-weight:700;color:#09090b;font-family:Arial,sans-serif;margin-bottom:4px;">'+inc.id+' — '+inc.title+'</div>'
+      +'<div style="font-size:13px;color:#71717a;font-family:Arial,sans-serif;">Status changed to <strong style="color:'+sColor+';">'+newStatus+'</strong>'+(inc.assignedTo?' — Assigned to <strong style="color:#374151;">'+inc.assignedTo+'</strong>':'')+'</div>'
+      +'</td></tr>'
+      +'<tr><td style="padding:20px 32px;border-bottom:1px solid #f0f0f0;">'
+      +'<div style="font-size:11px;font-weight:700;color:#cc2244;text-transform:uppercase;letter-spacing:1.5px;font-family:Arial,sans-serif;margin-bottom:12px;">Incident Details</div>'
+      +'<table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">'
+      +'<tr style="border-top:1px solid #f4f4f5;"><td style="padding:9px 0;font-size:12px;color:#71717a;font-weight:600;width:130px;font-family:Arial,sans-serif;">Category</td>'
+      +'<td style="padding:9px 0;font-size:13px;color:#09090b;font-weight:600;font-family:Arial,sans-serif;">'+inc.category+'</td></tr>'
+      +'<tr style="border-top:1px solid #f4f4f5;"><td style="padding:9px 0;font-size:12px;color:#71717a;font-weight:600;font-family:Arial,sans-serif;">Urgency</td>'
+      +'<td style="padding:9px 0;font-size:13px;font-weight:700;font-family:Arial,sans-serif;">'+inc.urgency+'</td></tr>'
+      +'</table></td></tr>'
+      +'<tr><td style="padding:14px 32px;">'
+      +'<table width="100%" cellpadding="0" cellspacing="0"><tr>'
+      +'<td><span style="font-size:11px;color:#a1a1aa;font-family:Arial,sans-serif;">INTEL-SD v1.0 &bull; '+new Date().toLocaleDateString('en-PH',{year:'numeric',month:'long',day:'numeric'})+'</span></td>'
+      +'<td align="right"><span style="font-size:11px;color:#a1a1aa;font-family:Arial,sans-serif;">Dedale Intelligence</span></td>'
+      +'</tr></table></td></tr>'
+      +'</table></td></tr></table></body></html>';
+    await fetch('https://graph.microsoft.com/v1.0/me/sendMail',{method:'POST',
+      headers:{'Authorization':'Bearer '+accessToken,'Content-Type':'application/json'},
+      body:JSON.stringify({message:{
+        subject:'[IT INCIDENT UPDATE] '+inc.id+' — '+inc.title+' is now '+newStatus,
+        body:{contentType:'HTML',content:html},
+        toRecipients:[{emailAddress:{address:inc.submittedByEmail}}]
+      },saveToSentItems:false})});
+    console.log('[StatusEmail] Sent to',inc.submittedByEmail,'— status:',newStatus);
+  }catch(e){console.warn('[StatusEmail] Failed',e);}
 }
 
 async function sendResolutionEmail(inc){
