@@ -327,7 +327,7 @@ select.form-control{cursor:pointer;}
 const CLIENT_ID='efcad5dc-5a65-4e5a-906b-54db03b58824';
 const TENANT_ID='115d6eac-9c52-4e39-9c4c-f8d77ede8a9d';
 const FILE_NAME='dedale-servicedesk-data.json';
-const SHARED_FILE_URL='https://graph.microsoft.com/v1.0/drives/b!JJGdEs4axkKFpdu0ZTYTO_7UT8rCzcFLjfdSqHtuqczk_Sy9CC9jTqYSgnfFkEuR/items/01GC2TK5GY2GOVW7725BZO354PWSELRRZ/content';
+const SHARED_FILE_URL='https://graph.microsoft.com/v1.0/sites/softwareclub.sharepoint.com,b82a470c-0892-4515-8605-dcca9e46a63d,d6799185-7c1f-4a8f-bac2-ae16fdb46e5b/drive/root:/dedale-servicedesk-data.json:/content'
 const ADMIN_DRIVE_ID='b!JJGdEs4axkKFpdu0ZTYTO_7UT8rCzcFLjfdSqHtuqczk_Sy9CC9jTqYSgnfFkEuR';
 const ADMIN_EMAIL='xerxis.dalanon@dedale.com';
 const SD_CLEAR_PIN_KEY='sd_clear_pin';
@@ -431,19 +431,17 @@ async function loadData(){
   incidents=[];
   nextIncNum=1;
   try{
-    var url=isAdmin
-      ?'https://graph.microsoft.com/v1.0/me/drive/root:/'+FILE_NAME+':/content'
-      :SHARED_FILE_URL;
-    const r=await fetch(url,{headers:{'Authorization':'Bearer '+accessToken}});
+    const r=await fetch(SHARED_FILE_URL,{headers:{'Authorization':'Bearer '+accessToken}});
     if(r.ok){
       const d=await r.json();
       var all=d.incidents||[];
       incidents=isAdmin?all:all.filter(function(i){return i&&i.submittedByEmail===currentUser.username;});
       nextIncNum=d.nextIncNum||1;
-      console.log('[loadData] Loaded',incidents.length,'tickets');
+      clearedIds=d.clearedIds||[];
+      console.log('[loadData] Loaded',all.length,'total tickets');
     }else if(r.status===404){
-      incidents=[];nextIncNum=1;
-      if(isAdmin)await saveData();
+      incidents=[];nextIncNum=1;clearedIds=[];
+      await saveData();
     }else{
       console.error('[loadData] Error:',r.status);
     }
@@ -457,9 +455,7 @@ async function saveData(){
   try{
     /* Always write to admin's own drive */
     var data={incidents:incidents,nextIncNum:nextIncNum,clearedIds:clearedIds,updatedAt:new Date().toISOString()};
-    var url='https://graph.microsoft.com/v1.0/me/drive/root:/'+FILE_NAME+':/content';
-    if(!isAdmin)url=SHARED_FILE_URL;
-    const r=await fetch(url,
+    const r=await fetch(SHARED_FILE_URL,
       {method:'PUT',
        headers:{'Authorization':'Bearer '+accessToken,'Content-Type':'application/json'},
        body:JSON.stringify(data,null,2)}
@@ -840,10 +836,7 @@ async function submitIncident(){
   };
   /* Load full file first to avoid overwriting other tickets */
   try{
-    var loadUrl=isAdmin
-      ?'https://graph.microsoft.com/v1.0/me/drive/root:/'+FILE_NAME+':/content'
-      :SHARED_FILE_URL;
-    const lr=await fetch(loadUrl,{headers:{'Authorization':'Bearer '+accessToken}});
+    const lr=await fetch(SHARED_FILE_URL,{headers:{'Authorization':'Bearer '+accessToken}});
     if(lr.ok){
       const ld=await lr.json();
       var existing=ld.incidents||[];
