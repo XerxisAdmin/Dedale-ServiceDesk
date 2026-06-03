@@ -128,8 +128,13 @@ select.form-control{cursor:pointer;}
 .detail-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px;}
 /* Notes */
 .notes-section{margin-top:8px;}
-.note-item{background:var(--navy-mid);border-left:3px solid var(--gold);padding:10px 14px;margin-bottom:8px;}
+.note-item{background:var(--navy-mid);padding:10px 14px;margin-bottom:8px;border-radius:2px;}
+.note-item.note-tech{border-left:3px solid var(--red,#cc2244);}
+.note-item.note-staff{border-left:3px solid var(--gold,#f59e0b);}
 .note-meta{font-family:'Share Tech Mono',monospace;font-size:9px;color:var(--text3);margin-bottom:4px;}
+.note-meta .note-type-badge{font-size:8px;font-weight:700;letter-spacing:1px;text-transform:uppercase;padding:1px 5px;border-radius:2px;margin-left:6px;}
+.note-meta .badge-tech{background:rgba(204,34,68,0.18);color:#cc2244;}
+.note-meta .badge-staff{background:rgba(245,158,11,0.18);color:#f59e0b;}
 .note-text{font-size:13px;color:var(--text2);}
 /* Empty state */
 .empty-state{text-align:center;padding:60px 20px;}
@@ -639,27 +644,32 @@ function openDetail(id){
     +'</div>'
     +'<div class="detail-box" style="margin-bottom:16px;"><div class="detail-label">Description</div><div class="detail-value" style="font-weight:400;font-size:13px;line-height:1.6;color:var(--text2);">'+inc.description+'</div></div>';
 
-  /* Notes */
+  /* Conversation Thread */
+  body+='<div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border2);">';
+  body+='<div class="detail-label" style="margin-bottom:10px;">💬 CONVERSATION THREAD</div>';
   if(inc.notes&&inc.notes.length){
-    body+='<div class="detail-label" style="margin-bottom:8px;">Resolution Notes</div>';
     body+=inc.notes.map(function(n){
-      return'<div class="note-item"><div class="note-meta">'+n.by+' &mdash; '+formatDate(n.at)+'</div><div class="note-text">'+n.text+'</div></div>';
+      var isTech=n.type==='tech'||!n.type;
+      var cls=isTech?'note-tech':'note-staff';
+      var badge=isTech?'<span class="note-type-badge badge-tech">Tech Note</span>':'<span class="note-type-badge badge-staff">Staff Reply</span>';
+      return'<div class="note-item '+cls+'"><div class="note-meta">'+n.by+' &mdash; '+formatDate(n.at)+badge+'</div><div class="note-text">'+n.text+'</div></div>';
     }).join('');
+  }else{
+    body+='<div style="font-size:12px;color:var(--text3);padding:6px 0 10px;">No messages yet.</div>';
   }
+  var noteLabel=isAdmin?'Add Tech Note':'Reply to Tech';
+  var notePlaceholder=isAdmin?'Add a resolution note or update...':'Send a reply or additional info to the IT team...';
+  var noteBtnLabel=isAdmin?'ADD NOTE':'SEND REPLY';
+  body+='<div style="margin-top:10px;">'    +'<div class="detail-label" style="margin-bottom:6px;">'+noteLabel+'</div>'    +'<textarea class="form-control" id="note-input-'+id+'" placeholder="'+notePlaceholder+'" style="min-height:70px;margin-bottom:8px;"></textarea>'    +'<button class="btn btn-outline btn-sm" onclick="addNote(\''+id+'\')">'+noteBtnLabel+'</button>'    +'</div>';
+  body+='</div>';
 
-  /* Admin actions */
+  /* Admin status actions */
   if(isAdmin){
-    body+='<div class="action-row">';
+    body+='<div class="action-row" style="margin-top:12px;">';
     if(inc.status==='Open')body+='<button class="btn btn-gold btn-sm" onclick="updateStatus(\''+id+'\',\'In Progress\')">▶ IN PROGRESS</button>';
     if(inc.status!=='Resolved')body+='<button class="btn btn-success btn-sm" onclick="resolveIncident(\''+id+'\')">✓ RESOLVE</button>';
     if(inc.status==='Resolved')body+='<button class="btn btn-outline btn-sm" onclick="updateStatus(\''+id+'\',\'Open\')">↩ REOPEN</button>';
     body+='</div>';
-    /* Add note */
-    body+='<div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border2);">'
-      +'<div class="detail-label" style="margin-bottom:8px;">Add Note</div>'
-      +'<textarea class="form-control" id="note-input-'+id+'" placeholder="Add a resolution note or update..." style="min-height:70px;margin-bottom:8px;"></textarea>'
-      +'<button class="btn btn-outline btn-sm" onclick="addNote(\''+id+'\')">ADD NOTE</button>'
-      +'</div>';
   }
 
   document.getElementById('detail-body').innerHTML=body;
@@ -701,7 +711,7 @@ async function resolveIncident(id){
   incidents[idx].updatedAt=new Date().toISOString();
   if(noteText){
     if(!incidents[idx].notes)incidents[idx].notes=[];
-    incidents[idx].notes.push({by:currentUser.name||currentUser.username,at:new Date().toISOString(),text:noteText});
+    incidents[idx].notes.push({by:currentUser.name||currentUser.username,at:new Date().toISOString(),text:noteText,type:'tech'});
   }
   await saveOneIncident(incidents[idx]);
   /* Send resolution email to submitter */
@@ -717,7 +727,8 @@ async function addNote(id){
   var idx=incidents.findIndex(function(i){return i.id===id;});
   if(idx<0)return;
   if(!incidents[idx].notes)incidents[idx].notes=[];
-  incidents[idx].notes.push({by:currentUser.name||currentUser.username,at:new Date().toISOString(),text:note.value.trim()});
+  var noteType=isAdmin?'tech':'staff';
+  incidents[idx].notes.push({by:currentUser.name||currentUser.username,at:new Date().toISOString(),text:note.value.trim(),type:noteType});
   incidents[idx].updatedAt=new Date().toISOString();
   await saveOneIncident(incidents[idx]);
   toast('Note added ✓');
