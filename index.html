@@ -481,10 +481,10 @@ async function loadAdminData(){
             if(att.name&&att.name.startsWith('ticket-')&&att.name.endsWith('.json')){
               try{
                 var inc=JSON.parse(decodeURIComponent(escape(atob(att.contentBytes))));
-                if(inc&&inc.id&&clearedIds.indexOf(inc.id)===-1){
+                var ck=inc.id+'|'+inc.createdAt;if(inc&&inc.id&&clearedIds.indexOf(ck)===-1){
                   allIncidents.push(inc);
                   console.log('[Admin] Got ticket:',inc.id,'from',inc.submittedBy);
-                }else if(inc&&inc.id){
+}else if(inc&&inc.id){
                   console.log('[Admin] Skipping cleared ticket:',inc.id);
                 }
               }catch(e){}
@@ -819,7 +819,7 @@ async function executeClearAll(){
   /* Stop auto-refresh so it doesn't pull old data back during save */
   if(_autoRefreshInterval){clearInterval(_autoRefreshInterval);_autoRefreshInterval=null;}
   /* Add all current incident IDs to clearedIds so inbox emails are skipped */
-  incidents.forEach(function(i){if(i&&i.id&&clearedIds.indexOf(i.id)===-1)clearedIds.push(i.id);});
+  incidents.forEach(function(i){var k=i.id+'|'+i.createdAt;if(i&&i.id&&clearedIds.indexOf(k)===-1)clearedIds.push(k);});
   incidents=[];
   nextIncNum=1;
   await saveData();
