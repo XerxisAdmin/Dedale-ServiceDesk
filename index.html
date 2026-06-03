@@ -477,7 +477,7 @@ async function saveOneIncident(inc){
 
 /* ── AUTO-REFRESH ── */
 var _autoRefreshInterval=null;
-var _autoRefreshSecs=2;
+var _autoRefreshSecs=5;
 var _isRefreshing=false;
 
 function startAutoRefresh(){
@@ -854,8 +854,10 @@ async function submitIncident(){
   resetSubmitForm();
   toast(inc.id+' submitted successfully ✓');
   showTab('dashboard');
-  renderDashboard();
-  renderIncidents();
+  /* Small delay to let SharePoint finish writing before reading back */
+  setTimeout(async function(){
+    await loadData();
+  }, 1500);
 }
 
 /* ── EMAILS ── */
