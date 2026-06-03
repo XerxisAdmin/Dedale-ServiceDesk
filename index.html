@@ -849,7 +849,6 @@ async function submitIncident(){
       clearedIds=ld.clearedIds||[];
     }
   }catch(e){}
-  incidents.push(inc);
   await saveData();
   await sendNewIncidentEmail(inc);
   resetSubmitForm();
