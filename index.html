@@ -224,9 +224,7 @@ select.form-control{cursor:pointer;}
         <div class="page-title">Incidents</div>
         <div class="page-sub">All submitted incidents</div>
       </div>
-      <div>
-        <button class="btn btn-danger btn-sm" id="clear-inc-btn" onclick="clearAllIncidents()" style="display:none;">&#128465; Clear All Logs</button>
-      </div>
+      <div></div>
     </div>
     <div class="filters">
       <select class="f-select" id="f-status" onchange="renderIncidents()">
@@ -406,7 +404,7 @@ async function onLoggedIn(){
     document.getElementById('tab-incidents').style.display='none';
   }
   var clearBtn=document.getElementById('clear-inc-btn');
-  if(clearBtn)clearBtn.style.display=isAdmin?'':'none';
+  if(clearBtn)clearBtn.style.display=isAdmin?'inline-block':'none';
   await loadData();
   updateOnlineUI(true);
   updateSyncStatus('connected');
