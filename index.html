@@ -518,43 +518,26 @@ async function loadAdminData(){
 }
 
 async function loadStaffData(){
-  /* Staff: read their sent items, get ticket data from .json attachments */
+  /* Staff: read from admin OneDrive, show only own tickets */
   try{
     const r=await fetch(
-      'https://graph.microsoft.com/v1.0/me/mailFolders/SentItems/messages?$search=%22subject:IT%20INCIDENT%22&$top=100&$select=id,subject,receivedDateTime',
+      'https://graph.microsoft.com/v1.0/drives/'+ADMIN_DRIVE_ID+'/root:/'+FILE_NAME+':/content',
       {headers:{'Authorization':'Bearer '+accessToken}}
     );
     if(r.ok){
       const d=await r.json();
-      var msgs=d.value||[];
-      var found=[];
-      for(var i=0;i<msgs.length;i++){
-        try{
-          var ar=await fetch(
-            'https://graph.microsoft.com/v1.0/me/messages/'+msgs[i].id+'/attachments',
-            {headers:{'Authorization':'Bearer '+accessToken}}
-          );
-          if(!ar.ok)continue;
-          var ad=await ar.json();
-          (ad.value||[]).forEach(function(att){
-            if(att.name&&att.name.startsWith('ticket-')&&att.name.endsWith('.json')){
-              try{
-                var inc=JSON.parse(decodeURIComponent(escape(atob(att.contentBytes))));
-                if(inc&&inc.id&&inc.submittedByEmail===currentUser.username)found.push(inc);
-              }catch(e){}
-            }
-          });
-        }catch(e){}
-      }
-      /* Dedup by id */
-      var staffById={};
-      found.forEach(function(i){if(i&&i.id&&!staffById[i.id])staffById[i.id]=i;});
-      var staffDeduped=Object.values(staffById);
-      staffDeduped.sort(function(a,b){return new Date(b.createdAt)-new Date(a.createdAt);});
-      incidents=staffDeduped;
-      console.log('[Staff] Loaded',staffDeduped.length,'own unique tickets');
+      var all=d.incidents||[];
+      var mine=all.filter(function(i){return i&&i.submittedByEmail===currentUser.username;});
+      mine.sort(function(a,b){return new Date(b.createdAt)-new Date(a.createdAt);});
+      incidents=mine;
+      console.log('[Staff] Loaded',mine.length,'own tickets from admin OneDrive');
+    }else if(r.status===404){
+      incidents=[];
+    }else{
+      console.error('[Staff] OneDrive read failed:',r.status);
+      incidents=[];
     }
-  }catch(e){console.error('[Staff] loadStaffData error',e);}
+  }catch(e){console.error('[Staff] loadStaffData error',e);incidents=[];}
 }
 
 async function saveData(){
@@ -816,17 +799,38 @@ async function clearAllIncidents(){
 }
 
 async function executeClearAll(){
-  /* Stop auto-refresh so it doesn't pull old data back during save */
   if(_autoRefreshInterval){clearInterval(_autoRefreshInterval);_autoRefreshInterval=null;}
-  /* Add all current incident IDs to clearedIds so inbox emails are skipped */
-  incidents.forEach(function(i){var k=i.id+'|'+i.createdAt;if(i&&i.id&&clearedIds.indexOf(k)===-1)clearedIds.push(k);});
+  toast('Clearing... please wait.');
+
+  /* Step 1: find and delete ALL [IT INCIDENT] emails from inbox */
+  try{
+    const r=await fetch(
+      'https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages?$search=%22subject:IT%20INCIDENT%22&$top=200&$select=id',
+      {headers:{'Authorization':'Bearer '+accessToken}}
+    );
+    if(r.ok){
+      const d=await r.json();
+      var msgs=d.value||[];
+      console.log('[Clear] Deleting',msgs.length,'inbox emails');
+      for(var i=0;i<msgs.length;i++){
+        try{
+          await fetch(
+            'https://graph.microsoft.com/v1.0/me/messages/'+msgs[i].id,
+            {method:'DELETE',headers:{'Authorization':'Bearer '+accessToken}}
+          );
+        }catch(e){}
+      }
+    }
+  }catch(e){console.warn('[Clear] Email delete failed',e);}
+
+  /* Step 2: wipe OneDrive file */
+  clearedIds=[];
   incidents=[];
   nextIncNum=1;
   await saveData();
   renderDashboard();
   renderIncidents();
   toast('All incidents cleared.');
-  /* Restart auto-refresh after save is complete */
   startAutoRefresh();
 }
 
