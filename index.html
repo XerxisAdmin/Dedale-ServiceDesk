@@ -420,12 +420,17 @@ async function onLoggedIn(){
 /* ── DATA ── */
 
 /*
-  SINGLE SOURCE OF TRUTH: Admin's OneDrive file (dedale-servicedesk-data.json)
-  - ALL users read from and write to this ONE file using ADMIN_DRIVE_ID
-  - Admin sees all tickets
-  - Staff see only their own tickets (filtered client-side)
-  - Files.ReadWrite.All delegated permission allows this
+  ARCHITECTURE: Drafts-as-database
+  - All tickets stored as draft emails in admin mailbox (xerxis.dalanon@dedale.com)
+  - Subject format: [SD-TICKET] INC0001
+  - Body: base64 encoded JSON ticket data
+  - Everyone reads drafts via Mail.Read (already granted)
+  - Admin writes drafts via me/messages (their own mailbox)
+  - Staff submit: sends email to admin, admin app saves as draft automatically
+  - No OneDrive cross-user issues
 */
+
+const DRAFT_SUBJECT_PREFIX='[SD-TICKET] ';
 
 async function loadData(){
   incidents=[];
@@ -442,155 +447,129 @@ async function loadData(){
 }
 
 async function loadAdminData(){
-  var allIncidents=[];
-  var maxNum=1;
-
-  /* Step 1: load admin OneDrive file — has resolved/updated/noted tickets */
+  /* Admin: read all draft tickets from own mailbox */
   try{
     const r=await fetch(
-      'https://graph.microsoft.com/v1.0/me/drive/root:/'+FILE_NAME+':/content',
+      'https://graph.microsoft.com/v1.0/me/mailFolders/drafts/messages?$top=200&$select=id,subject,body',
       {headers:{'Authorization':'Bearer '+accessToken}}
     );
-    if(r.ok){
-      const d=await r.json();
-      (d.incidents||[]).forEach(function(i){allIncidents.push(i);});
-      maxNum=Math.max(maxNum,d.nextIncNum||1);
-      clearedIds=(d.clearedIds||[]);
-      console.log('[Admin] OneDrive:',d.incidents?d.incidents.length:0,'tickets, cleared:',clearedIds.length);
-    }
-  }catch(e){console.warn('[Admin] OneDrive load failed',e);}
-
-  /* Step 2: read inbox emails, fetch .json attachments from each */
-  try{
-    const r=await fetch(
-      'https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages?$search=%22subject:IT%20INCIDENT%22&$top=200&$select=id,subject,receivedDateTime',
-      {headers:{'Authorization':'Bearer '+accessToken}}
-    );
-    if(r.ok){
-      const d=await r.json();
-      var msgs=d.value||[];
-      console.log('[Admin] Inbox emails:',msgs.length);
-      for(var i=0;i<msgs.length;i++){
-        try{
-          var ar=await fetch(
-            'https://graph.microsoft.com/v1.0/me/messages/'+msgs[i].id+'/attachments',
-            {headers:{'Authorization':'Bearer '+accessToken}}
-          );
-          if(!ar.ok)continue;
-          var ad=await ar.json();
-          (ad.value||[]).forEach(function(att){
-            if(att.name&&att.name.startsWith('ticket-')&&att.name.endsWith('.json')){
-              try{
-                var inc=JSON.parse(decodeURIComponent(escape(atob(att.contentBytes))));
-                var ck=inc.id+'|'+inc.createdAt;if(inc&&inc.id&&clearedIds.indexOf(ck)===-1){
-                  allIncidents.push(inc);
-                  console.log('[Admin] Got ticket:',inc.id,'from',inc.submittedBy);
-}else if(inc&&inc.id){
-                  console.log('[Admin] Skipping cleared ticket:',inc.id);
-                }
-              }catch(e){}
-            }
-          });
-        }catch(e){}
-      }
-    }else{
-      console.error('[Admin] Inbox failed:',r.status);
-    }
-  }catch(e){console.error('[Admin] Mail error',e);}
-
-  /* Deduplicate — OneDrive version always wins over email version */
-  /* First pass: index all by id */
-  var byId={};
-  /* Add email versions first */
-  allIncidents.forEach(function(i){
-    if(!i||!i.id)return;
-    if(!byId[i.id])byId[i.id]=i;
-  });
-  /* Second pass: OneDrive versions override (loaded first into allIncidents) */
-  /* Already handled since OneDrive loaded first and email dupes get skipped */
-  var deduped=Object.values(byId);
-  deduped.sort(function(a,b){return new Date(b.createdAt)-new Date(a.createdAt);});
-  incidents=deduped;
-  console.log('[Admin] Total unique tickets:',incidents.length);
-  deduped.forEach(function(i){
-    if(i.id){var n=parseInt(i.id.replace('INC',''),10);if(!isNaN(n))maxNum=Math.max(maxNum,n+1);}
-  });
-  nextIncNum=maxNum;
+    if(!r.ok){console.error('[Admin] Drafts fetch failed:',r.status);return;}
+    const d=await r.json();
+    var msgs=(d.value||[]).filter(function(m){return m.subject&&m.subject.startsWith(DRAFT_SUBJECT_PREFIX);});
+    console.log('[Admin] Found',msgs.length,'ticket drafts');
+    var allInc=[];
+    var maxNum=1;
+    msgs.forEach(function(msg){
+      try{
+        var b64=msg.body.content.replace(/<[^>]+>/g,'').trim();
+        var inc=JSON.parse(decodeURIComponent(escape(atob(b64))));
+        if(inc&&inc.id){
+          inc._draftId=msg.id;
+          allInc.push(inc);
+          var n=parseInt(inc.id.replace('INC',''),10);
+          if(!isNaN(n))maxNum=Math.max(maxNum,n+1);
+        }
+      }catch(e){}
+    });
+    allInc.sort(function(a,b){return new Date(b.createdAt)-new Date(a.createdAt);});
+    incidents=allInc;
+    nextIncNum=maxNum;
+    console.log('[Admin] Loaded',incidents.length,'tickets, next:',nextIncNum);
+  }catch(e){console.error('[Admin] loadAdminData error',e);}
 }
 
 async function loadStaffData(){
-  /* Staff: read own tickets from sent items attachments */
+  /* Staff: read admin drafts filtered to own tickets */
   try{
     const r=await fetch(
-      'https://graph.microsoft.com/v1.0/me/mailFolders/SentItems/messages?$search=%22subject:IT%20INCIDENT%22&$top=100&$select=id,subject,receivedDateTime',
+      'https://graph.microsoft.com/v1.0/users/'+ADMIN_EMAIL+'/mailFolders/drafts/messages?$top=200&$select=id,subject,body',
       {headers:{'Authorization':'Bearer '+accessToken}}
+    );
+    if(!r.ok){console.error('[Staff] Drafts fetch failed:',r.status);return;}
+    const d=await r.json();
+    var msgs=(d.value||[]).filter(function(m){return m.subject&&m.subject.startsWith(DRAFT_SUBJECT_PREFIX);});
+    var found=[];
+    msgs.forEach(function(msg){
+      try{
+        var b64=msg.body.content.replace(/<[^>]+>/g,'').trim();
+        var inc=JSON.parse(decodeURIComponent(escape(atob(b64))));
+        if(inc&&inc.id&&inc.submittedByEmail===currentUser.username){
+          inc._draftId=msg.id;
+          found.push(inc);
+        }
+      }catch(e){}
+    });
+    found.sort(function(a,b){return new Date(b.createdAt)-new Date(a.createdAt);});
+    incidents=found;
+    console.log('[Staff] Loaded',found.length,'own tickets');
+  }catch(e){console.error('[Staff] loadStaffData error',e);}
+}
+
+async function saveDraft(inc){
+  /* Save/update a single ticket as a draft in admin mailbox */
+  var b64=btoa(unescape(encodeURIComponent(JSON.stringify(inc))));
+  var body={
+    subject:DRAFT_SUBJECT_PREFIX+inc.id,
+    body:{contentType:'Text',content:b64}
+  };
+  if(inc._draftId){
+    /* Update existing draft */
+    const r=await fetch(
+      'https://graph.microsoft.com/v1.0/me/messages/'+inc._draftId,
+      {method:'PATCH',
+       headers:{'Authorization':'Bearer '+accessToken,'Content-Type':'application/json'},
+       body:JSON.stringify(body)}
+    );
+    if(r.ok)console.log('[saveDraft] Updated draft for',inc.id);
+    else console.error('[saveDraft] Update failed:',r.status,await r.text());
+    return r.ok;
+  }else{
+    /* Create new draft */
+    const r=await fetch(
+      'https://graph.microsoft.com/v1.0/me/messages',
+      {method:'POST',
+       headers:{'Authorization':'Bearer '+accessToken,'Content-Type':'application/json'},
+       body:JSON.stringify(body)}
     );
     if(r.ok){
       const d=await r.json();
-      var msgs=d.value||[];
-      var found=[];
-      for(var i=0;i<msgs.length;i++){
-        try{
-          var ar=await fetch(
-            'https://graph.microsoft.com/v1.0/me/messages/'+msgs[i].id+'/attachments',
-            {headers:{'Authorization':'Bearer '+accessToken}}
-          );
-          if(!ar.ok)continue;
-          var ad=await ar.json();
-          (ad.value||[]).forEach(function(att){
-            if(att.name&&att.name.startsWith('ticket-')&&att.name.endsWith('.json')){
-              try{
-                var inc=JSON.parse(decodeURIComponent(escape(atob(att.contentBytes))));
-                if(inc&&inc.id&&inc.submittedByEmail===currentUser.username)found.push(inc);
-              }catch(e){}
-            }
-          });
-        }catch(e){}
-      }
-      /* Dedup by id — keep latest */
-      var byId={};
-      found.forEach(function(i){
-        if(!i||!i.id)return;
-        if(!byId[i.id]){byId[i.id]=i;}
-        else{
-          var a=new Date(byId[i.id].updatedAt||byId[i.id].createdAt||0);
-          var b=new Date(i.updatedAt||i.createdAt||0);
-          if(b>a)byId[i.id]=i;
-        }
-      });
-      var deduped=Object.values(byId);
-      deduped.sort(function(a,b){return new Date(b.createdAt)-new Date(a.createdAt);});
-      incidents=deduped;
-      console.log('[Staff] Loaded',deduped.length,'own tickets from sent items');
+      inc._draftId=d.id;
+      console.log('[saveDraft] Created draft for',inc.id);
+    }else{
+      console.error('[saveDraft] Create failed:',r.status,await r.text());
     }
-  }catch(e){console.error('[Staff] loadStaffData error',e);incidents=[];}
+    return r.ok;
+  }
 }
 
 async function saveData(){
+  /* Admin saves all incidents as drafts */
+  if(!isAdmin)return;
   updateSyncStatus('syncing');
   try{
-    var data={incidents:incidents,nextIncNum:nextIncNum,clearedIds:clearedIds,updatedAt:new Date().toISOString()};
-    var driveUrl=isAdmin
-      ?'https://graph.microsoft.com/v1.0/me/drive/root:/'+FILE_NAME+':/content'
-      :'https://graph.microsoft.com/v1.0/drives/'+ADMIN_DRIVE_ID+'/root:/'+FILE_NAME+':/content';
-    const r=await fetch(driveUrl,
-      {method:'PUT',
-       headers:{'Authorization':'Bearer '+accessToken,'Content-Type':'application/json'},
-       body:JSON.stringify(data,null,2)}
-    );
-    if(r.ok){
-      console.log('[SaveData] Saved',incidents.length,'tickets');
-      updateSyncStatus('saved');
-      updateOnlineUI(true);
-      setTimeout(function(){updateSyncStatus('connected');},2500);
-    }else{
-      console.error('[SaveData] Error:',r.status, await r.text());
-      updateSyncStatus('error');
+    for(var i=0;i<incidents.length;i++){
+      await saveDraft(incidents[i]);
     }
+    updateSyncStatus('saved');
+    updateOnlineUI(true);
+    setTimeout(function(){updateSyncStatus('connected');},2500);
   }catch(e){
-    console.error('[SaveData] Exception:',e);
-    updateSyncStatus('offline');
-    updateOnlineUI(false);
+    console.error('[saveData] error',e);
+    updateSyncStatus('error');
+  }
+}
+
+async function saveOneIncident(inc){
+  /* Save a single incident draft — used after status/note updates */
+  updateSyncStatus('syncing');
+  try{
+    await saveDraft(inc);
+    updateSyncStatus('saved');
+    updateOnlineUI(true);
+    setTimeout(function(){updateSyncStatus('connected');},2500);
+  }catch(e){
+    console.error('[saveOneIncident] error',e);
+    updateSyncStatus('error');
   }
 }
 
@@ -612,16 +591,12 @@ async function autoRefreshTick(){
   try{
     var prevCount=incidents.length;
     await loadData();
-    renderDashboard();
-    renderIncidents();
     if(isAdmin&&incidents.length>prevCount){
       var diff=incidents.length-prevCount;
       toast('🔔 '+diff+' new ticket'+(diff>1?'s':'')+' received');
     }
     updateRefreshIndicator(true);
-  }catch(e){
-    updateRefreshIndicator(false);
-  }
+  }catch(e){updateRefreshIndicator(false);}
   _isRefreshing=false;
 }
 
@@ -780,7 +755,7 @@ async function updateStatus(id,status,techName){
     incidents[idx].assignedTo=null;
     incidents[idx].assignedAt=null;
   }
-  await saveData();
+  await saveOneIncident(incidents[idx]);
   closeModal('detail-modal');
   renderDashboard();renderIncidents();
   toast('Status updated to '+status);
@@ -798,7 +773,7 @@ async function resolveIncident(id){
     if(!incidents[idx].notes)incidents[idx].notes=[];
     incidents[idx].notes.push({by:currentUser.name||currentUser.username,at:new Date().toISOString(),text:noteText});
   }
-  await saveData();
+  await saveOneIncident(incidents[idx]);
   /* Send resolution email to submitter */
   await sendResolutionEmail(incidents[idx]);
   closeModal('detail-modal');
@@ -814,7 +789,7 @@ async function addNote(id){
   if(!incidents[idx].notes)incidents[idx].notes=[];
   incidents[idx].notes.push({by:currentUser.name||currentUser.username,at:new Date().toISOString(),text:note.value.trim()});
   incidents[idx].updatedAt=new Date().toISOString();
-  await saveData();
+  await saveOneIncident(incidents[idx]);
   openDetail(id);
   toast('Note added ✓');
 }
@@ -830,7 +805,7 @@ async function executeClearAll(){
   if(_autoRefreshInterval){clearInterval(_autoRefreshInterval);_autoRefreshInterval=null;}
   toast('Clearing... please wait.');
 
-  /* Step 1: find and delete ALL [IT INCIDENT] emails from inbox */
+  /* Step 1: delete ALL [IT INCIDENT] emails from admin inbox */
   try{
     const r=await fetch(
       'https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages?$search=%22subject:IT%20INCIDENT%22&$top=200&$select=id',
@@ -842,16 +817,54 @@ async function executeClearAll(){
       console.log('[Clear] Deleting',msgs.length,'inbox emails');
       for(var i=0;i<msgs.length;i++){
         try{
-          await fetch(
-            'https://graph.microsoft.com/v1.0/me/messages/'+msgs[i].id,
-            {method:'DELETE',headers:{'Authorization':'Bearer '+accessToken}}
-          );
+          await fetch('https://graph.microsoft.com/v1.0/me/messages/'+msgs[i].id,
+            {method:'DELETE',headers:{'Authorization':'Bearer '+accessToken}});
         }catch(e){}
       }
     }
-  }catch(e){console.warn('[Clear] Email delete failed',e);}
+  }catch(e){console.warn('[Clear] Inbox delete failed',e);}
 
-  /* Step 2: wipe OneDrive file */
+  /* Step 2: delete all ticket drafts from admin mailbox */
+  try{
+    const dr=await fetch(
+      'https://graph.microsoft.com/v1.0/me/mailFolders/drafts/messages?$top=200&$select=id,subject',
+      {headers:{'Authorization':'Bearer '+accessToken}}
+    );
+    if(dr.ok){
+      const dd=await dr.json();
+      var dmsgs=(dd.value||[]).filter(function(m){return m.subject&&m.subject.startsWith(DRAFT_SUBJECT_PREFIX);});
+      console.log('[Clear] Deleting',dmsgs.length,'ticket drafts');
+      for(var d=0;d<dmsgs.length;d++){
+        try{
+          await fetch('https://graph.microsoft.com/v1.0/me/messages/'+dmsgs[d].id,
+            {method:'DELETE',headers:{'Authorization':'Bearer '+accessToken}});
+        }catch(e){}
+      }
+    }
+  }catch(e){console.warn('[Clear] Draft delete failed',e);}
+
+  /* Step 3: send [SD CLEAR] command email to all known staff from current incidents */
+  var staffEmails=[];
+  incidents.forEach(function(i){
+    if(i&&i.submittedByEmail&&i.submittedByEmail!==ADMIN_EMAIL&&staffEmails.indexOf(i.submittedByEmail)===-1){
+      staffEmails.push(i.submittedByEmail);
+    }
+  });
+  var clearTs=new Date().toISOString();
+  for(var s=0;s<staffEmails.length;s++){
+    try{
+      await fetch('https://graph.microsoft.com/v1.0/me/sendMail',{method:'POST',
+        headers:{'Authorization':'Bearer '+accessToken,'Content-Type':'application/json'},
+        body:JSON.stringify({message:{
+          subject:'[SD CLEAR] '+clearTs,
+          body:{contentType:'Text',content:'IT Service Desk logs cleared by admin.'},
+          toRecipients:[{emailAddress:{address:staffEmails[s]}}]
+        },saveToSentItems:false})});
+      console.log('[Clear] Sent clear command to',staffEmails[s]);
+    }catch(e){}
+  }
+
+  /* Step 3: wipe OneDrive file */
   clearedIds=[];
   incidents=[];
   nextIncNum=1;
@@ -938,8 +951,10 @@ async function submitIncident(){
     updatedAt:new Date().toISOString(),
     notes:[]
   };
-  incidents.push(inc);
-  if(isAdmin){await saveData();}
+  if(isAdmin){
+    await saveDraft(inc);
+    incidents.push(inc);
+  }
   await sendNewIncidentEmail(inc);
   resetSubmitForm();
   toast(inc.id+' submitted successfully ✓');
