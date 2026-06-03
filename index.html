@@ -429,26 +429,121 @@ async function onLoggedIn(){
 async function loadData(){
   incidents=[];
   nextIncNum=1;
+  if(isAdmin){
+    await loadAdminData();
+  }else{
+    await loadStaffData();
+  }
+}
+
+async function loadAdminData(){
+  var allIncidents=[];
+  var maxNum=1;
+
+  /* Step 1: load admin OneDrive file — has resolved/updated/noted tickets */
   try{
     const r=await fetch(
-      'https://graph.microsoft.com/v1.0/drives/'+ADMIN_DRIVE_ID+'/root:/'+FILE_NAME+':/content',
+      'https://graph.microsoft.com/v1.0/me/drive/root:/'+FILE_NAME+':/content',
       {headers:{'Authorization':'Bearer '+accessToken}}
     );
     if(r.ok){
       const d=await r.json();
-      incidents=d.incidents||[];
-      nextIncNum=d.nextIncNum||1;
-      console.log('[LoadData] Loaded',incidents.length,'tickets');
-    }else if(r.status===404){
-      incidents=[];
-      nextIncNum=1;
-      console.log('[LoadData] File not found — starting fresh');
-    }else{
-      console.error('[LoadData] Error:',r.status);
+      (d.incidents||[]).forEach(function(i){allIncidents.push(i);});
+      maxNum=Math.max(maxNum,d.nextIncNum||1);
+      console.log('[Admin] OneDrive:',d.incidents?d.incidents.length:0,'tickets');
     }
-  }catch(e){
-    console.error('[LoadData] Exception:',e);
-  }
+  }catch(e){console.warn('[Admin] OneDrive load failed',e);}
+
+  /* Step 2: read inbox emails, fetch .json attachments from each */
+  try{
+    const r=await fetch(
+      'https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages?$search=%22subject:IT%20INCIDENT%22&$top=200&$select=id,subject,receivedDateTime',
+      {headers:{'Authorization':'Bearer '+accessToken}}
+    );
+    if(r.ok){
+      const d=await r.json();
+      var msgs=d.value||[];
+      console.log('[Admin] Inbox emails:',msgs.length);
+      for(var i=0;i<msgs.length;i++){
+        try{
+          var ar=await fetch(
+            'https://graph.microsoft.com/v1.0/me/messages/'+msgs[i].id+'/attachments',
+            {headers:{'Authorization':'Bearer '+accessToken}}
+          );
+          if(!ar.ok)continue;
+          var ad=await ar.json();
+          (ad.value||[]).forEach(function(att){
+            if(att.name&&att.name.startsWith('ticket-')&&att.name.endsWith('.json')){
+              try{
+                var inc=JSON.parse(decodeURIComponent(escape(atob(att.contentBytes))));
+                if(inc&&inc.id){
+                  allIncidents.push(inc);
+                  console.log('[Admin] Got ticket:',inc.id,'from',inc.submittedBy);
+                }
+              }catch(e){}
+            }
+          });
+        }catch(e){}
+      }
+    }else{
+      console.error('[Admin] Inbox failed:',r.status);
+    }
+  }catch(e){console.error('[Admin] Mail error',e);}
+
+  /* Deduplicate — OneDrive version wins (has latest status/notes) */
+  var byId={};
+  allIncidents.forEach(function(i){
+    if(!i||!i.id)return;
+    if(!byId[i.id]){byId[i.id]=i;}
+    else{
+      var a=new Date(byId[i.id].updatedAt||byId[i.id].createdAt||0);
+      var b=new Date(i.updatedAt||i.createdAt||0);
+      if(b>a)byId[i.id]=i;
+    }
+  });
+  var deduped=Object.values(byId);
+  deduped.sort(function(a,b){return new Date(b.createdAt)-new Date(a.createdAt);});
+  incidents=deduped;
+  console.log('[Admin] Total:',incidents.length,'tickets');
+  deduped.forEach(function(i){
+    if(i.id){var n=parseInt(i.id.replace('INC',''),10);if(!isNaN(n))maxNum=Math.max(maxNum,n+1);}
+  });
+  nextIncNum=maxNum;
+}
+
+async function loadStaffData(){
+  /* Staff: read their sent items, get ticket data from .json attachments */
+  try{
+    const r=await fetch(
+      'https://graph.microsoft.com/v1.0/me/mailFolders/SentItems/messages?$search=%22subject:IT%20INCIDENT%22&$top=100&$select=id,subject,receivedDateTime',
+      {headers:{'Authorization':'Bearer '+accessToken}}
+    );
+    if(r.ok){
+      const d=await r.json();
+      var msgs=d.value||[];
+      var found=[];
+      for(var i=0;i<msgs.length;i++){
+        try{
+          var ar=await fetch(
+            'https://graph.microsoft.com/v1.0/me/messages/'+msgs[i].id+'/attachments',
+            {headers:{'Authorization':'Bearer '+accessToken}}
+          );
+          if(!ar.ok)continue;
+          var ad=await ar.json();
+          (ad.value||[]).forEach(function(att){
+            if(att.name&&att.name.startsWith('ticket-')&&att.name.endsWith('.json')){
+              try{
+                var inc=JSON.parse(decodeURIComponent(escape(atob(att.contentBytes))));
+                if(inc&&inc.id&&inc.submittedByEmail===currentUser.username)found.push(inc);
+              }catch(e){}
+            }
+          });
+        }catch(e){}
+      }
+      incidents=found;
+      console.log('[Staff] Loaded',found.length,'own tickets');
+    }
+  }catch(e){console.error('[Staff] loadStaffData error',e);}
 }
 
 async function saveData(){
@@ -456,7 +551,7 @@ async function saveData(){
   try{
     var data={incidents:incidents,nextIncNum:nextIncNum,updatedAt:new Date().toISOString()};
     const r=await fetch(
-      'https://graph.microsoft.com/v1.0/drives/'+ADMIN_DRIVE_ID+'/root:/'+FILE_NAME+':/content',
+      'https://graph.microsoft.com/v1.0/me/drive/root:/'+FILE_NAME+':/content',
       {method:'PUT',
        headers:{'Authorization':'Bearer '+accessToken,'Content-Type':'application/json'},
        body:JSON.stringify(data,null,2)}
@@ -846,9 +941,15 @@ async function sendNewIncidentEmail(inc){
       +'</table></td></tr></table></body></html>';
     await fetch('https://graph.microsoft.com/v1.0/me/sendMail',{method:'POST',
       headers:{'Authorization':'Bearer '+accessToken,'Content-Type':'application/json'},
-      body:JSON.stringify({message:{subject:'[IT INCIDENT] '+inc.id+' — '+inc.title+'||'+btoa(unescape(encodeURIComponent(JSON.stringify(inc)))),
+      body:JSON.stringify({message:{subject:'[IT INCIDENT] '+inc.id+' — '+inc.title,
         body:{contentType:'HTML',content:html},
-        toRecipients:[{emailAddress:{address:ADMIN_EMAIL,name:'Xerxis Dalanon'}}]},
+        toRecipients:[{emailAddress:{address:ADMIN_EMAIL,name:'Xerxis Dalanon'}}],
+        attachments:[{
+          '@odata.type':'#microsoft.graph.fileAttachment',
+          name:'ticket-'+inc.id+'.json',
+          contentType:'application/json',
+          contentBytes:btoa(unescape(encodeURIComponent(JSON.stringify(inc))))
+        }]},
         saveToSentItems:true})});
   }catch(e){console.error('Email failed',e);}
 }
