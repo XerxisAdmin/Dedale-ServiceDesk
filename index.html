@@ -453,8 +453,30 @@ async function loadData(){
 async function saveData(){
   updateSyncStatus('syncing');
   try{
-    /* Always write to admin's own drive */
-    var data={incidents:incidents,nextIncNum:nextIncNum,clearedIds:clearedIds,updatedAt:new Date().toISOString()};
+    /* Always read the full file first, then merge, so no user overwrites another's tickets */
+    var allIncidents=incidents;
+    var allNextIncNum=nextIncNum;
+    var allClearedIds=clearedIds;
+    try{
+      const rr=await fetch(SHARED_FILE_URL,{headers:{'Authorization':'Bearer '+accessToken}});
+      if(rr.ok){
+        const dd=await rr.json();
+        var existing=dd.incidents||[];
+        /* Merge: keep all existing tickets, add/update any from current user's local copy */
+        incidents.forEach(function(inc){
+          var idx=existing.findIndex(function(e){return e.id===inc.id;});
+          if(idx===-1){existing.push(inc);}
+          else{existing[idx]=inc;}
+        });
+        allIncidents=existing;
+        allNextIncNum=Math.max(nextIncNum,dd.nextIncNum||1);
+        /* Merge clearedIds */
+        (dd.clearedIds||[]).forEach(function(id){
+          if(allClearedIds.indexOf(id)===-1){allClearedIds.push(id);}
+        });
+      }
+    }catch(e){console.warn('[saveData] Pre-read failed, writing local only',e);}
+    var data={incidents:allIncidents,nextIncNum:allNextIncNum,clearedIds:allClearedIds,updatedAt:new Date().toISOString()};
     const r=await fetch(SHARED_FILE_URL,
       {method:'PUT',
        headers:{'Authorization':'Bearer '+accessToken,'Content-Type':'application/json'},
@@ -463,7 +485,7 @@ async function saveData(){
     if(r.ok){
       updateSyncStatus('saved');updateOnlineUI(true);
       setTimeout(function(){updateSyncStatus('connected');},2500);
-      console.log('[saveData] Saved',incidents.length,'tickets');
+      console.log('[saveData] Saved',allIncidents.length,'tickets');
     }else{
       console.error('[saveData] Error:',r.status,await r.text());
       updateSyncStatus('error');
