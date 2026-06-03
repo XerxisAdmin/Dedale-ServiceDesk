@@ -327,6 +327,7 @@ select.form-control{cursor:pointer;}
 const CLIENT_ID='efcad5dc-5a65-4e5a-906b-54db03b58824';
 const TENANT_ID='115d6eac-9c52-4e39-9c4c-f8d77ede8a9d';
 const FILE_NAME='dedale-servicedesk-data.json';
+const SHARED_FILE_URL='https://graph.microsoft.com/v1.0/shares/u!aHR0cHM6Ly9zb2Z0d2FyZWNsdWItbXkuc2hhcmVwb2ludC5jb20vOnU6L2cvcGVyc29uYWwveGVyeGlzX2RhbGFub25fZGVkYWxlX2NvbS9JUUJzZmNvSW4yWVBUYTZUM2w1bHJETXpBWXpxaXI2X2ItMW9sazF1OUtFRFB1dz9lPVg1djJ4Ug/driveItem/content';
 const ADMIN_DRIVE_ID='b!JJGdEs4axkKFpdu0ZTYTO_7UT8rCzcFLjfdSqHtuqczk_Sy9CC9jTqYSgnfFkEuR';
 const ADMIN_EMAIL='xerxis.dalanon@dedale.com';
 const SD_CLEAR_PIN_KEY='sd_clear_pin';
@@ -520,8 +521,7 @@ async function loadAdminData(){
 async function loadStaffData(){
   /* Staff: read from admin OneDrive, show only own tickets */
   try{
-    const r=await fetch(
-      'https://graph.microsoft.com/v1.0/drives/'+ADMIN_DRIVE_ID+'/root:/'+FILE_NAME+':/content',
+    const r=await fetch(SHARED_FILE_URL,
       {headers:{'Authorization':'Bearer '+accessToken}}
     );
     if(r.ok){
@@ -530,11 +530,11 @@ async function loadStaffData(){
       var mine=all.filter(function(i){return i&&i.submittedByEmail===currentUser.username;});
       mine.sort(function(a,b){return new Date(b.createdAt)-new Date(a.createdAt);});
       incidents=mine;
-      console.log('[Staff] Loaded',mine.length,'own tickets from admin OneDrive');
+      console.log('[Staff] Loaded',mine.length,'own tickets via shared URL');
     }else if(r.status===404){
       incidents=[];
     }else{
-      console.error('[Staff] OneDrive read failed:',r.status);
+      console.error('[Staff] Read failed:',r.status);
       incidents=[];
     }
   }catch(e){console.error('[Staff] loadStaffData error',e);incidents=[];}
@@ -544,8 +544,10 @@ async function saveData(){
   updateSyncStatus('syncing');
   try{
     var data={incidents:incidents,nextIncNum:nextIncNum,clearedIds:clearedIds,updatedAt:new Date().toISOString()};
-    const r=await fetch(
-      'https://graph.microsoft.com/v1.0/me/drive/root:/'+FILE_NAME+':/content',
+    var driveUrl=isAdmin
+      ?'https://graph.microsoft.com/v1.0/me/drive/root:/'+FILE_NAME+':/content'
+      :'https://graph.microsoft.com/v1.0/drives/'+ADMIN_DRIVE_ID+'/root:/'+FILE_NAME+':/content';
+    const r=await fetch(driveUrl,
       {method:'PUT',
        headers:{'Authorization':'Bearer '+accessToken,'Content-Type':'application/json'},
        body:JSON.stringify(data,null,2)}
@@ -910,8 +912,46 @@ async function submitIncident(){
     updatedAt:new Date().toISOString(),
     notes:[]
   };
-  incidents.push(inc);
-  await saveData();
+  if(isAdmin){
+    /* Admin: just push and save */
+    incidents.push(inc);
+    await saveData();
+  }else{
+    /* Staff: load full admin file, append ticket, save back to ADMIN_DRIVE_ID */
+    try{
+      var allInc=[];
+      var allNext=1;
+      var allCleared=[];
+      const loadR=await fetch(SHARED_FILE_URL,
+        {headers:{'Authorization':'Bearer '+accessToken}}
+      );
+      if(loadR.ok){
+        const ld=await loadR.json();
+        allInc=ld.incidents||[];
+        allNext=ld.nextIncNum||1;
+        allCleared=ld.clearedIds||[];
+      }
+      allInc.push(inc);
+      var saveR=await fetch(
+        SHARED_FILE_URL,
+        {method:'PUT',
+         headers:{'Authorization':'Bearer '+accessToken,'Content-Type':'application/json'},
+         body:JSON.stringify({incidents:allInc,nextIncNum:Math.max(allNext,nextIncNum),clearedIds:allCleared,updatedAt:new Date().toISOString()},null,2)}
+      );
+      if(saveR.ok){
+        console.log('[Staff] Ticket saved to admin OneDrive');
+        incidents.push(inc);
+      }else{
+        console.error('[Staff] Save failed:',saveR.status);
+        toast('Submission failed. Please try again.');
+        return;
+      }
+    }catch(e){
+      console.error('[Staff] Submit error:',e);
+      toast('Submission failed. Please try again.');
+      return;
+    }
+  }
   await sendNewIncidentEmail(inc);
   resetSubmitForm();
   toast(inc.id+' submitted successfully ✓');
