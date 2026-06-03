@@ -334,7 +334,7 @@ const SCOPES=['Files.ReadWrite','Files.ReadWrite.All','User.Read','User.Read.All
 
 /* ── STATE ── */
 let msalInstance,accessToken,currentUser,isAdmin=false;
-let incidents=[],nextIncNum=1;
+let incidents=[],nextIncNum=1,clearedIds=[];
 
 /* ── SYNC STATUS ── */
 function updateSyncStatus(s){
@@ -429,11 +429,15 @@ async function onLoggedIn(){
 async function loadData(){
   incidents=[];
   nextIncNum=1;
-  if(isAdmin){
-    await loadAdminData();
-  }else{
-    await loadStaffData();
-  }
+  try{
+    if(isAdmin){
+      await loadAdminData();
+    }else{
+      await loadStaffData();
+    }
+  }catch(e){console.error('[loadData]',e);}
+  renderDashboard();
+  renderIncidents();
 }
 
 async function loadAdminData(){
@@ -450,7 +454,8 @@ async function loadAdminData(){
       const d=await r.json();
       (d.incidents||[]).forEach(function(i){allIncidents.push(i);});
       maxNum=Math.max(maxNum,d.nextIncNum||1);
-      console.log('[Admin] OneDrive:',d.incidents?d.incidents.length:0,'tickets');
+      clearedIds=(d.clearedIds||[]);
+      console.log('[Admin] OneDrive:',d.incidents?d.incidents.length:0,'tickets, cleared:',clearedIds.length);
     }
   }catch(e){console.warn('[Admin] OneDrive load failed',e);}
 
@@ -476,9 +481,11 @@ async function loadAdminData(){
             if(att.name&&att.name.startsWith('ticket-')&&att.name.endsWith('.json')){
               try{
                 var inc=JSON.parse(decodeURIComponent(escape(atob(att.contentBytes))));
-                if(inc&&inc.id){
+                if(inc&&inc.id&&clearedIds.indexOf(inc.id)===-1){
                   allIncidents.push(inc);
                   console.log('[Admin] Got ticket:',inc.id,'from',inc.submittedBy);
+                }else if(inc&&inc.id){
+                  console.log('[Admin] Skipping cleared ticket:',inc.id);
                 }
               }catch(e){}
             }
@@ -490,21 +497,20 @@ async function loadAdminData(){
     }
   }catch(e){console.error('[Admin] Mail error',e);}
 
-  /* Deduplicate — OneDrive version wins (has latest status/notes) */
+  /* Deduplicate — OneDrive version always wins over email version */
+  /* First pass: index all by id */
   var byId={};
+  /* Add email versions first */
   allIncidents.forEach(function(i){
     if(!i||!i.id)return;
-    if(!byId[i.id]){byId[i.id]=i;}
-    else{
-      var a=new Date(byId[i.id].updatedAt||byId[i.id].createdAt||0);
-      var b=new Date(i.updatedAt||i.createdAt||0);
-      if(b>a)byId[i.id]=i;
-    }
+    if(!byId[i.id])byId[i.id]=i;
   });
+  /* Second pass: OneDrive versions override (loaded first into allIncidents) */
+  /* Already handled since OneDrive loaded first and email dupes get skipped */
   var deduped=Object.values(byId);
   deduped.sort(function(a,b){return new Date(b.createdAt)-new Date(a.createdAt);});
   incidents=deduped;
-  console.log('[Admin] Total:',incidents.length,'tickets');
+  console.log('[Admin] Total unique tickets:',incidents.length);
   deduped.forEach(function(i){
     if(i.id){var n=parseInt(i.id.replace('INC',''),10);if(!isNaN(n))maxNum=Math.max(maxNum,n+1);}
   });
@@ -540,8 +546,13 @@ async function loadStaffData(){
           });
         }catch(e){}
       }
-      incidents=found;
-      console.log('[Staff] Loaded',found.length,'own tickets');
+      /* Dedup by id */
+      var staffById={};
+      found.forEach(function(i){if(i&&i.id&&!staffById[i.id])staffById[i.id]=i;});
+      var staffDeduped=Object.values(staffById);
+      staffDeduped.sort(function(a,b){return new Date(b.createdAt)-new Date(a.createdAt);});
+      incidents=staffDeduped;
+      console.log('[Staff] Loaded',staffDeduped.length,'own unique tickets');
     }
   }catch(e){console.error('[Staff] loadStaffData error',e);}
 }
@@ -549,7 +560,7 @@ async function loadStaffData(){
 async function saveData(){
   updateSyncStatus('syncing');
   try{
-    var data={incidents:incidents,nextIncNum:nextIncNum,updatedAt:new Date().toISOString()};
+    var data={incidents:incidents,nextIncNum:nextIncNum,clearedIds:clearedIds,updatedAt:new Date().toISOString()};
     const r=await fetch(
       'https://graph.microsoft.com/v1.0/me/drive/root:/'+FILE_NAME+':/content',
       {method:'PUT',
@@ -807,6 +818,8 @@ async function clearAllIncidents(){
 async function executeClearAll(){
   /* Stop auto-refresh so it doesn't pull old data back during save */
   if(_autoRefreshInterval){clearInterval(_autoRefreshInterval);_autoRefreshInterval=null;}
+  /* Add all current incident IDs to clearedIds so inbox emails are skipped */
+  incidents.forEach(function(i){if(i&&i.id&&clearedIds.indexOf(i.id)===-1)clearedIds.push(i.id);});
   incidents=[];
   nextIncNum=1;
   await saveData();
