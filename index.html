@@ -805,12 +805,16 @@ async function clearAllIncidents(){
 }
 
 async function executeClearAll(){
+  /* Stop auto-refresh so it doesn't pull old data back during save */
+  if(_autoRefreshInterval){clearInterval(_autoRefreshInterval);_autoRefreshInterval=null;}
   incidents=[];
   nextIncNum=1;
   await saveData();
   renderDashboard();
   renderIncidents();
   toast('All incidents cleared.');
+  /* Restart auto-refresh after save is complete */
+  startAutoRefresh();
 }
 
 function showSdPinModal(mode){
