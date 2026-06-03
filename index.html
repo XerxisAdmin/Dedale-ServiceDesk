@@ -328,6 +328,7 @@ const TENANT_ID='115d6eac-9c52-4e39-9c4c-f8d77ede8a9d';
 const FILE_NAME='dedale-servicedesk-data.json';
 const ADMIN_DRIVE_ID='b!JJGdEs4axkKFpdu0ZTYTO_7UT8rCzcFLjfdSqHtuqczk_Sy9CC9jTqYSgnfFkEuR';
 const ADMIN_EMAIL='xerxis.dalanon@dedale.com';
+const SD_CLEAR_PIN_KEY='sd_clear_pin';
 const SCOPES=['Files.ReadWrite','Files.ReadWrite.All','User.Read','User.Read.All','Mail.Send'];
 
 /* ── STATE ── */
@@ -416,135 +417,63 @@ async function onLoggedIn(){
 
 /* ── DATA ── */
 
-/* 
-  ARCHITECTURE:
-  - Staff submit → sends email to xerxis.dalanon@dedale.com with ticket JSON in subject line
-  - Admin loads → reads own inbox via Graph API, parses ticket JSON from each email
-  - Admin saves → writes resolved/updated tickets to own OneDrive (me/drive always works)
-  - Staff dashboard → shows only their own tickets from their own sent items
+/*
+  SINGLE SOURCE OF TRUTH: Admin's OneDrive file (dedale-servicedesk-data.json)
+  - ALL users read from and write to this ONE file using ADMIN_DRIVE_ID
+  - Admin sees all tickets
+  - Staff see only their own tickets (filtered client-side)
+  - Files.ReadWrite.All delegated permission allows this
 */
 
 async function loadData(){
   incidents=[];
+  nextIncNum=1;
   try{
-    if(isAdmin){
-      await loadAdminData();
+    const r=await fetch(
+      'https://graph.microsoft.com/v1.0/drives/'+ADMIN_DRIVE_ID+'/root:/'+FILE_NAME+':/content',
+      {headers:{'Authorization':'Bearer '+accessToken}}
+    );
+    if(r.ok){
+      const d=await r.json();
+      incidents=d.incidents||[];
+      nextIncNum=d.nextIncNum||1;
+      console.log('[LoadData] Loaded',incidents.length,'tickets');
+    }else if(r.status===404){
+      incidents=[];
+      nextIncNum=1;
+      console.log('[LoadData] File not found — starting fresh');
     }else{
-      await loadStaffData();
+      console.error('[LoadData] Error:',r.status);
     }
-  }catch(e){console.error('loadData error',e);}
-  renderDashboard();
-  renderIncidents();
-}
-
-async function loadStaffData(){
-  /* Staff: show tickets they submitted — read from their own sent items */
-  try{
-    const r=await fetch(
-      'https://graph.microsoft.com/v1.0/me/mailFolders/SentItems/messages?$search=%22subject:IT%20INCIDENT%22&$top=100&$select=subject,body,receivedDateTime',
-      {headers:{'Authorization':'Bearer '+accessToken}}
-    );
-    if(r.ok){
-      const d=await r.json();
-      var found=[];
-      (d.value||[]).forEach(function(msg){
-        try{
-          var inc=extractTicket(msg.body.content);
-          if(inc&&inc.id)found.push(inc);
-        }catch(e){}
-      });
-      incidents=found;
-    }
-  }catch(e){console.error('loadStaffData error',e);}
-}
-
-async function loadAdminData(){
-  var allIncidents=[];
-  var maxNum=1;
-
-  /* Step 1: load admin's saved file from own OneDrive (has resolved/updated tickets) */
-  try{
-    const r=await fetch(
-      'https://graph.microsoft.com/v1.0/me/drive/root:/'+FILE_NAME+':/content',
-      {headers:{'Authorization':'Bearer '+accessToken}}
-    );
-    if(r.ok){
-      const d=await r.json();
-      (d.incidents||[]).forEach(function(i){allIncidents.push(i);});
-      maxNum=Math.max(maxNum,d.nextIncNum||1);
-    }
-  }catch(e){console.warn('OneDrive load failed',e);}
-
-  /* Step 2: read admin inbox for all [IT INCIDENT] emails from staff */
-  try{
-    const r=await fetch(
-      'https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages?$search=%22subject:IT%20INCIDENT%22&$top=200&$select=subject,body,receivedDateTime',
-      {headers:{'Authorization':'Bearer '+accessToken}}
-    );
-    if(r.ok){
-      const d=await r.json();
-      console.log('[Admin] Inbox emails found:',d.value?d.value.length:0);
-      (d.value||[]).forEach(function(msg){
-        try{
-          var inc=extractTicket(msg.body.content);
-          if(inc&&inc.id){
-            allIncidents.push(inc);
-            console.log('[Admin] Parsed ticket:',inc.id,'from',inc.submittedBy);
-          }
-        }catch(e){console.warn('[Admin] Parse failed:',e);}
-      });
-    }else{
-      console.error('[Admin] Inbox fetch failed:',r.status);
-    }
-  }catch(e){console.error('[Admin] Mail read error',e);}
-
-  /* Deduplicate — OneDrive saved version wins over email version */
-  var byId={};
-  allIncidents.forEach(function(i){
-    if(!i||!i.id)return;
-    if(!byId[i.id]){byId[i.id]=i;}
-    else{
-      /* Keep the one with latest updatedAt */
-      var existing=new Date(byId[i.id].updatedAt||0);
-      var incoming=new Date(i.updatedAt||0);
-      if(incoming>existing)byId[i.id]=i;
-    }
-  });
-
-  var deduped=Object.values(byId);
-  deduped.sort(function(a,b){return new Date(b.createdAt)-new Date(a.createdAt);});
-  incidents=deduped;
-  console.log('[Admin] Total incidents after dedup:',incidents.length);
-
-  deduped.forEach(function(i){
-    if(i.id){var n=parseInt(i.id.replace('INC',''),10);if(!isNaN(n))maxNum=Math.max(maxNum,n+1);}
-  });
-  nextIncNum=maxNum;
-}
-
-function extractTicket(htmlContent){
-  /* Ticket JSON is embedded as base64 in a span at the bottom of the email */
-  var m=htmlContent.match(/data-sd="([A-Za-z0-9+\/=]+)"/);
-  if(m&&m[1]){
-    return JSON.parse(decodeURIComponent(escape(atob(m[1]))));
+  }catch(e){
+    console.error('[LoadData] Exception:',e);
   }
-  return null;
 }
 
 async function saveData(){
-  /* Only admin saves — writes all tickets to own OneDrive */
-  if(!isAdmin)return;
   updateSyncStatus('syncing');
   try{
     var data={incidents:incidents,nextIncNum:nextIncNum,updatedAt:new Date().toISOString()};
     const r=await fetch(
-      'https://graph.microsoft.com/v1.0/me/drive/root:/'+FILE_NAME+':/content',
-      {method:'PUT',headers:{'Authorization':'Bearer '+accessToken,'Content-Type':'application/json'},
+      'https://graph.microsoft.com/v1.0/drives/'+ADMIN_DRIVE_ID+'/root:/'+FILE_NAME+':/content',
+      {method:'PUT',
+       headers:{'Authorization':'Bearer '+accessToken,'Content-Type':'application/json'},
        body:JSON.stringify(data,null,2)}
     );
-    if(r.ok){updateSyncStatus('saved');updateOnlineUI(true);setTimeout(function(){updateSyncStatus('connected');},2500);}
-    else{console.error('[SaveData] Error:',r.status);updateSyncStatus('error');}
-  }catch(e){console.error('Save failed',e);updateSyncStatus('offline');updateOnlineUI(false);}
+    if(r.ok){
+      console.log('[SaveData] Saved',incidents.length,'tickets');
+      updateSyncStatus('saved');
+      updateOnlineUI(true);
+      setTimeout(function(){updateSyncStatus('connected');},2500);
+    }else{
+      console.error('[SaveData] Error:',r.status, await r.text());
+      updateSyncStatus('error');
+    }
+  }catch(e){
+    console.error('[SaveData] Exception:',e);
+    updateSyncStatus('offline');
+    updateOnlineUI(false);
+  }
 }
 
 /* ── AUTO-REFRESH ── */
@@ -565,13 +494,14 @@ async function autoRefreshTick(){
   try{
     var prevCount=incidents.length;
     await loadData();
+    renderDashboard();
+    renderIncidents();
     if(isAdmin&&incidents.length>prevCount){
       var diff=incidents.length-prevCount;
       toast('🔔 '+diff+' new ticket'+(diff>1?'s':'')+' received');
     }
     updateRefreshIndicator(true);
   }catch(e){
-    console.warn('[AutoRefresh] Failed:',e);
     updateRefreshIndicator(false);
   }
   _isRefreshing=false;
@@ -591,8 +521,14 @@ function updateRefreshIndicator(ok){
 
 /* ── HELPERS ── */
 function genIncId(){
-  const id='INC'+String(nextIncNum).padStart(4,'0');
-  nextIncNum++;
+  /* Use timestamp-based ID so every ticket across all users is unique */
+  var now=new Date();
+  var id='INC'+now.getFullYear().toString().slice(2)+
+    String(now.getMonth()+1).padStart(2,'0')+
+    String(now.getDate()).padStart(2,'0')+
+    String(now.getHours()).padStart(2,'0')+
+    String(now.getMinutes()).padStart(2,'0')+
+    String(now.getSeconds()).padStart(2,'0');
   return id;
 }
 
@@ -774,14 +710,66 @@ async function addNote(id){
 /* ── CLEAR ALL INCIDENTS ── */
 async function clearAllIncidents(){
   if(!isAdmin){toast('Admin only.');return;}
-  if(!incidents.length){toast('No incidents to clear.');return;}
-  if(!confirm('Clear ALL incidents and reset INC counter to INC0001?\n\nTotal records: '+incidents.length+'\n\nThis cannot be undone.'))return;
+  /* Show PIN modal — same system as Inventory */
+  localStorage.getItem(SD_CLEAR_PIN_KEY)?showSdPinModal('verify'):showSdPinModal('create');
+}
+
+async function executeClearAll(){
   incidents=[];
   nextIncNum=1;
   await saveData();
   renderDashboard();
   renderIncidents();
-  toast('All incidents cleared. Counter reset to INC0001.');
+  toast('All incidents cleared.');
+}
+
+function showSdPinModal(mode){
+  document.getElementById('sd-pin-modal-overlay')?.remove();
+  const isCreate=mode==='create';
+  const overlay=document.createElement('div');overlay.id='sd-pin-modal-overlay';overlay.style.cssText='position:fixed;inset:0;background:rgba(3,5,10,0.88);z-index:700;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(4px)';
+  const box=document.createElement('div');box.style.cssText='background:var(--surface);border:1px solid var(--border);padding:28px 30px;width:380px;max-width:92vw;box-shadow:var(--shadow-lg);clip-path:polygon(0 0,calc(100% - 14px) 0,100% 14px,100% 100%,14px 100%,0 calc(100% - 14px));position:relative';
+  const bar=document.createElement('div');bar.style.cssText='position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,var(--crimson),var(--gold),transparent)';box.appendChild(bar);
+  const title=document.createElement('div');title.style.cssText="font-family:'Orbitron',monospace;font-size:13px;font-weight:700;color:#fff;letter-spacing:2px;margin-bottom:6px";title.textContent=isCreate?'CREATE CLEAR PIN':'ENTER CLEAR PIN';box.appendChild(title);
+  const desc=document.createElement('div');desc.style.cssText='font-size:13px;color:var(--text2);margin-bottom:20px';desc.textContent=isCreate?'Set a 6-digit PIN to protect the Clear All Logs action.':'Enter your PIN to confirm clearing all incidents.';box.appendChild(desc);
+  const g1=document.createElement('div');g1.style.marginBottom='14px';
+  const l1=document.createElement('label');l1.style.cssText="font-size:10px;font-family:'Share Tech Mono',monospace;color:var(--gold);letter-spacing:2px;display:block;margin-bottom:6px";l1.textContent=isCreate?'NEW PIN':'PIN';
+  const inp1=document.createElement('input');inp1.id='sd-pin-input-1';inp1.type='password';inp1.setAttribute('inputmode','numeric');inp1.setAttribute('autocomplete','off');inp1.maxLength=6;inp1.placeholder='••••••';inp1.style.cssText="width:100%;padding:12px 14px;border:1px solid var(--border);background:var(--navy-mid);color:var(--text);font-family:'Share Tech Mono',monospace;font-size:18px;letter-spacing:6px;outline:none;text-align:center";
+  inp1.addEventListener('input',()=>{inp1.value=inp1.value.replace(/\D/g,'');if(inp1.value.length===6){const i2=document.getElementById('sd-pin-input-2');if(i2)i2.focus();else submitSdPin();}});
+  inp1.addEventListener('keydown',e=>{if(e.key==='Enter'){const i2=document.getElementById('sd-pin-input-2');if(i2)i2.focus();else submitSdPin();}});
+  g1.appendChild(l1);g1.appendChild(inp1);box.appendChild(g1);
+  if(isCreate){
+    const g2=document.createElement('div');g2.style.marginBottom='14px';
+    const l2=document.createElement('label');l2.style.cssText="font-size:10px;font-family:'Share Tech Mono',monospace;color:var(--gold);letter-spacing:2px;display:block;margin-bottom:6px";l2.textContent='CONFIRM PIN';
+    const inp2=document.createElement('input');inp2.id='sd-pin-input-2';inp2.type='password';inp2.setAttribute('inputmode','numeric');inp2.setAttribute('autocomplete','off');inp2.maxLength=6;inp2.placeholder='••••••';inp2.style.cssText="width:100%;padding:12px 14px;border:1px solid var(--border);background:var(--navy-mid);color:var(--text);font-family:'Share Tech Mono',monospace;font-size:18px;letter-spacing:6px;outline:none;text-align:center";
+    inp2.addEventListener('input',()=>{inp2.value=inp2.value.replace(/\D/g,'');if(inp2.value.length===6)submitSdPin();});
+    inp2.addEventListener('keydown',e=>{if(e.key==='Enter')submitSdPin();});
+    g2.appendChild(l2);g2.appendChild(inp2);box.appendChild(g2);
+  }
+  const err=document.createElement('div');err.id='sd-pin-error';err.style.cssText='display:none;padding:8px 12px;background:rgba(220,38,38,0.1);border:1px solid #fca5a5;color:#ef4444;font-size:12px;margin-bottom:14px;font-family:Share Tech Mono,monospace';box.appendChild(err);
+  const btns=document.createElement('div');btns.style.cssText='display:flex;gap:8px;justify-content:flex-end';
+  const cancelBtn=document.createElement('button');cancelBtn.style.cssText="font-family:'Orbitron',monospace;font-size:9px;font-weight:600;letter-spacing:1.5px;padding:9px 18px;background:transparent;color:var(--gold);border:1px solid var(--gold-dark);cursor:pointer";cancelBtn.textContent='CANCEL';cancelBtn.onclick=()=>overlay.remove();
+  const confirmBtn=document.createElement('button');confirmBtn.style.cssText="font-family:'Orbitron',monospace;font-size:9px;font-weight:600;letter-spacing:1.5px;padding:9px 18px;background:linear-gradient(135deg,var(--crimson-dark),var(--crimson));color:#fff;border:none;cursor:pointer";confirmBtn.textContent=isCreate?'SET PIN':'CONFIRM';confirmBtn.onclick=submitSdPin;
+  btns.appendChild(cancelBtn);btns.appendChild(confirmBtn);box.appendChild(btns);
+  overlay.appendChild(box);document.body.appendChild(overlay);overlay.dataset.mode=mode;
+  setTimeout(()=>inp1.focus(),100);
+}
+
+function submitSdPin(){
+  const overlay=document.getElementById('sd-pin-modal-overlay');if(!overlay)return;
+  const mode=overlay.dataset.mode,pin1=document.getElementById('sd-pin-input-1')?.value?.trim();
+  const errorEl=document.getElementById('sd-pin-error');
+  function showError(msg){errorEl.textContent=msg;errorEl.style.display='block';document.getElementById('sd-pin-input-1').value='';if(document.getElementById('sd-pin-input-2'))document.getElementById('sd-pin-input-2').value='';document.getElementById('sd-pin-input-1').focus();}
+  if(mode==='create'){
+    if(!pin1||!/^\d{6}$/.test(pin1))return showError('PIN must be exactly 6 digits.');
+    const pin2=document.getElementById('sd-pin-input-2')?.value?.trim();if(pin1!==pin2)return showError('PINs do not match. Please try again.');
+    localStorage.setItem(SD_CLEAR_PIN_KEY,btoa(pin1+'dedale-sd-salt'));overlay.remove();
+    toast('PIN created. Clearing all incidents...');
+    setTimeout(()=>executeClearAll(),600);
+  }else{
+    if(!pin1)return showError('Please enter your PIN.');
+    if(btoa(pin1+'dedale-sd-salt')===localStorage.getItem(SD_CLEAR_PIN_KEY)){overlay.remove();executeClearAll();}
+    else showError('Incorrect PIN. Please try again.');
+  }
 }
 
 /* ── SUBMIT ── */
@@ -811,10 +799,14 @@ async function submitIncident(){
     updatedAt:new Date().toISOString(),
     notes:[]
   };
+  incidents.push(inc);
+  await saveData();
   await sendNewIncidentEmail(inc);
   resetSubmitForm();
   toast(inc.id+' submitted successfully ✓');
   showTab('dashboard');
+  renderDashboard();
+  renderIncidents();
 }
 
 /* ── EMAILS ── */
@@ -859,8 +851,8 @@ async function sendNewIncidentEmail(inc){
       +'</table></td></tr></table></body></html>';
     await fetch('https://graph.microsoft.com/v1.0/me/sendMail',{method:'POST',
       headers:{'Authorization':'Bearer '+accessToken,'Content-Type':'application/json'},
-      body:JSON.stringify({message:{subject:'[IT INCIDENT] '+inc.id+' — '+inc.title,
-        body:{contentType:'HTML',content:html+'<span data-sd="'+btoa(unescape(encodeURIComponent(JSON.stringify(inc))))+'" style="display:none"></span>'},
+      body:JSON.stringify({message:{subject:'[IT INCIDENT] '+inc.id+' — '+inc.title+'||'+btoa(unescape(encodeURIComponent(JSON.stringify(inc)))),
+        body:{contentType:'HTML',content:html},
         toRecipients:[{emailAddress:{address:ADMIN_EMAIL,name:'Xerxis Dalanon'}}]},
         saveToSentItems:true})});
   }catch(e){console.error('Email failed',e);}
