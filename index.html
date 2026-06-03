@@ -301,7 +301,7 @@ select.form-control{cursor:pointer;}
         <input type="text" class="form-control" id="s-device" placeholder="e.g. Lenovo 15IRH10, Serial: pf532n0">
       </div>
       <div style="display:flex;gap:10px;margin-top:8px;">
-        <button class="btn btn-primary" onclick="submitIncident()">&#9654; SUBMIT INCIDENT</button>
+        <button class="btn btn-primary" id="submit-inc-btn" onclick="submitIncident()">&#9654; SUBMIT INCIDENT</button>
         <button class="btn btn-outline" onclick="resetSubmitForm()">CLEAR</button>
       </div>
     </div>
@@ -718,8 +718,12 @@ async function addNote(id){
   incidents[idx].notes.push({by:currentUser.name||currentUser.username,at:new Date().toISOString(),text:note.value.trim()});
   incidents[idx].updatedAt=new Date().toISOString();
   await saveOneIncident(incidents[idx]);
-  openDetail(id);
   toast('Note added ✓');
+  /* Reload from SharePoint so note is confirmed saved before re-rendering */
+  await loadData();
+  renderDashboard();
+  renderIncidents();
+  openDetail(id);
 }
 
 /* ── CLEAR ALL INCIDENTS ── */
@@ -819,12 +823,18 @@ function resetSubmitForm(){
 }
 
 async function submitIncident(){
+  var submitBtn=document.getElementById('submit-inc-btn');
+  if(submitBtn&&submitBtn.disabled)return; /* Prevent double submit */
+  if(submitBtn){submitBtn.disabled=true;submitBtn.textContent='⏳ SUBMITTING...';}
   var title=document.getElementById('s-title').value.trim();
   var category=document.getElementById('s-category').value;
   var urgency=document.getElementById('s-urgency').value;
   var desc=document.getElementById('s-desc').value.trim();
   var device=document.getElementById('s-device').value.trim();
-  if(!title||!category||!urgency||!desc){toast('Please fill in all required fields.');return;}
+  if(!title||!category||!urgency||!desc){
+    if(submitBtn){submitBtn.disabled=false;submitBtn.innerHTML='&#9654; SUBMIT INCIDENT';}
+    toast('Please fill in all required fields.');return;
+  }
   var inc={
     id:genIncId(),
     title:title,
@@ -858,10 +868,13 @@ async function submitIncident(){
   await sendNewIncidentEmail(inc);
   resetSubmitForm();
   toast(inc.id+' submitted successfully ✓');
+  if(submitBtn){submitBtn.disabled=false;submitBtn.innerHTML='&#9654; SUBMIT INCIDENT';}
   showTab('dashboard');
   /* Small delay to let SharePoint finish writing before reading back */
   setTimeout(async function(){
     await loadData();
+    renderDashboard();
+    renderIncidents();
   }, 1500);
 }
 
