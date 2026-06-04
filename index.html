@@ -164,6 +164,7 @@ select.form-control{cursor:pointer;}
   .view{padding:16px 12px;}
 }
 </style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 </head>
 <body>
 
@@ -203,7 +204,7 @@ select.form-control{cursor:pointer;}
 <!-- App -->
 <div id="app">
   <div id="tabs">
-    <div class="tab active" id="tab-dashboard" onclick="showTab('dashboard')">Dashboard</div>
+    <div class="tab active" id="tab-dashboard" onclick="showTab('dashboard')" style="display:none;">📊 Dashboard</div>
     <div class="tab" id="tab-incidents" onclick="showTab('incidents')">
       Incidents <span id="open-badge" style="display:none;" class="notif-dot"></span>
     </div>
@@ -211,26 +212,51 @@ select.form-control{cursor:pointer;}
   </div>
 
   <!-- Dashboard -->
+  <!-- Dashboard — Admin Analytics Only -->
   <div class="view active" id="view-dashboard">
     <div class="page-hdr">
       <div>
-        <div class="page-title">Dashboard</div>
-        <div class="page-sub" id="dash-sub">INTEL-SD // IT SERVICE DESK</div>
+        <div class="page-title">Analytics Dashboard</div>
+        <div class="page-sub">INTEL-SD // IT SERVICE DESK</div>
       </div>
       <div>
         <button class="btn btn-danger btn-sm" id="clear-inc-btn" onclick="clearAllIncidents()" style="display:none;">&#128465; Clear All Logs</button>
       </div>
     </div>
+    <!-- Stat cards row -->
     <div class="stats-row" id="stats-row">
-      <div class="stat-card" id="scard-open" onclick="toggleDashFilter('Open')"><div class="stat-label">• OPEN</div><div class="stat-value" id="stat-open">0</div></div>
-      <div class="stat-card" id="scard-progress" onclick="toggleDashFilter('In Progress')"><div class="stat-label">• IN PROGRESS</div><div class="stat-value gold" id="stat-progress">0</div></div>
-      <div class="stat-card" id="scard-resolved" onclick="toggleDashFilter('Resolved')"><div class="stat-label">• RESOLVED</div><div class="stat-value green" id="stat-resolved">0</div></div>
-      <div class="stat-card" id="scard-overdue" onclick="toggleDashFilter('Overdue')" style="border-color:rgba(204,34,68,0.3);"><div class="stat-label" style="color:var(--crimson);">• OVERDUE</div><div class="stat-value" id="stat-overdue" style="color:var(--crimson);">0</div></div>
-      <div class="stat-card" id="scard-total" onclick="toggleDashFilter(null)"><div class="stat-label">• TOTAL</div><div class="stat-value orange" id="stat-total">0</div></div>
+      <div class="stat-card" id="scard-open" onclick="showTab('incidents');toggleDashFilter('Open')"><div class="stat-label">• OPEN</div><div class="stat-value" id="stat-open">0</div></div>
+      <div class="stat-card" id="scard-progress" onclick="showTab('incidents');toggleDashFilter('In Progress')"><div class="stat-label">• IN PROGRESS</div><div class="stat-value gold" id="stat-progress">0</div></div>
+      <div class="stat-card" id="scard-resolved" onclick="showTab('incidents');toggleDashFilter('Resolved')"><div class="stat-label">• RESOLVED</div><div class="stat-value green" id="stat-resolved">0</div></div>
+      <div class="stat-card" id="scard-overdue" onclick="showTab('incidents');toggleDashFilter('Overdue')" style="border-color:rgba(204,34,68,0.3);"><div class="stat-label" style="color:var(--crimson);">• OVERDUE</div><div class="stat-value" id="stat-overdue" style="color:var(--crimson);">0</div></div>
+      <div class="stat-card" id="scard-total" onclick="showTab('incidents');toggleDashFilter(null)"><div class="stat-label">• TOTAL</div><div class="stat-value orange" id="stat-total">0</div></div>
     </div>
-    <div id="recent-incidents">
-      <div class="page-title" style="font-size:11px;margin-bottom:12px;">RECENT INCIDENTS</div>
-      <div id="recent-list"><div class="empty-state"><div class="empty-icon">📋</div><div class="empty-title">No incidents yet</div></div></div>
+    <!-- Analytics Charts -->
+    <div id="analytics-section" style="margin-top:24px;">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">
+        <div style="background:var(--surface);border:1px solid var(--border2);padding:20px;">
+          <div class="detail-label" style="margin-bottom:12px;">📊 TICKET VOLUME — LAST 7 DAYS</div>
+          <canvas id="chart-volume" height="180"></canvas>
+        </div>
+        <div style="background:var(--surface);border:1px solid var(--border2);padding:20px;">
+          <div class="detail-label" style="margin-bottom:12px;">⏱ AVG TURNAROUND TIME (HRS)</div>
+          <canvas id="chart-turnaround" height="180"></canvas>
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;">
+        <div style="background:var(--surface);border:1px solid var(--border2);padding:20px;">
+          <div class="detail-label" style="margin-bottom:12px;">🍩 TICKETS BY STATUS</div>
+          <canvas id="chart-status" height="180"></canvas>
+        </div>
+        <div style="background:var(--surface);border:1px solid var(--border2);padding:20px;">
+          <div class="detail-label" style="margin-bottom:12px;">📂 TICKETS BY CATEGORY</div>
+          <canvas id="chart-category" height="180"></canvas>
+        </div>
+        <div style="background:var(--surface);border:1px solid var(--border2);padding:20px;">
+          <div class="detail-label" style="margin-bottom:12px;">✅ SLA COMPLIANCE RATE</div>
+          <canvas id="chart-sla" height="180"></canvas>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -238,10 +264,18 @@ select.form-control{cursor:pointer;}
   <div class="view" id="view-incidents">
     <div class="page-hdr">
       <div>
-        <div class="page-title">Incidents</div>
-        <div class="page-sub">All submitted incidents</div>
+        <div class="page-title" id="inc-page-title">Incidents</div>
+        <div class="page-sub" id="inc-page-sub">All submitted incidents</div>
       </div>
       <div></div>
+    </div>
+    <!-- Stat cards — shown for both admin and staff (staff sees own stats) -->
+    <div class="stats-row" id="inc-stats-row" style="margin-bottom:20px;">
+      <div class="stat-card" id="scard-open" onclick="toggleDashFilter('Open')"><div class="stat-label">• OPEN</div><div class="stat-value" id="stat-open">0</div></div>
+      <div class="stat-card" id="scard-progress" onclick="toggleDashFilter('In Progress')"><div class="stat-label">• IN PROGRESS</div><div class="stat-value gold" id="stat-progress">0</div></div>
+      <div class="stat-card" id="scard-resolved" onclick="toggleDashFilter('Resolved')"><div class="stat-label">• RESOLVED</div><div class="stat-value green" id="stat-resolved">0</div></div>
+      <div class="stat-card" id="scard-overdue" onclick="toggleDashFilter('Overdue')" style="border-color:rgba(204,34,68,0.3);"><div class="stat-label" style="color:var(--crimson);">• OVERDUE</div><div class="stat-value" id="stat-overdue" style="color:var(--crimson);">0</div></div>
+      <div class="stat-card" id="scard-total" onclick="toggleDashFilter(null)"><div class="stat-label">• TOTAL</div><div class="stat-value orange" id="stat-total">0</div></div>
     </div>
     <div class="filters">
       <select class="f-select" id="f-status" onchange="renderIncidents()">
@@ -423,9 +457,24 @@ async function onLoggedIn(){
   document.getElementById('login-screen').style.display='none';
   document.getElementById('header').style.display='flex';
   document.getElementById('app').style.display='block';
-  /* Show/hide incidents tab for admin */
-  if(!isAdmin){
-    document.getElementById('tab-incidents').style.display='none';
+  /* Admin: show Dashboard tab, start on Dashboard */
+  /* Staff: hide Dashboard tab, start on Incidents (My Tickets) */
+  if(isAdmin){
+    document.getElementById('tab-dashboard').style.display='inline-block';
+    document.getElementById('tab-incidents').style.display='inline-block';
+    document.getElementById('tab-incidents').textContent='';
+    document.getElementById('tab-incidents').innerHTML='Incidents <span id="open-badge" style="display:none;" class="notif-dot"></span>';
+    showTab('dashboard');
+  }else{
+    document.getElementById('tab-dashboard').style.display='none';
+    document.getElementById('tab-incidents').style.display='inline-block';
+    document.getElementById('tab-incidents').innerHTML='My Tickets <span id="open-badge" style="display:none;" class="notif-dot"></span>';
+    /* Update incidents page title for staff */
+    var t=document.getElementById('inc-page-title');
+    var s=document.getElementById('inc-page-sub');
+    if(t)t.textContent='My Tickets';
+    if(s)s.textContent='Your submitted IT incidents';
+    showTab('incidents');
   }
   var clearBtn=document.getElementById('clear-inc-btn');
   if(clearBtn)clearBtn.style.display=isAdmin?'inline-block':'none';
@@ -468,6 +517,7 @@ async function loadData(){
   }catch(e){console.error('[loadData]',e);}
   renderDashboard();
   renderIncidents();
+  if(isAdmin)renderAnalytics();
 }
 
 async function saveData(){
@@ -625,7 +675,7 @@ function showTab(name){
   document.querySelectorAll('.view').forEach(function(v){v.classList.remove('active');});
   document.getElementById('tab-'+name).classList.add('active');
   document.getElementById('view-'+name).classList.add('active');
-  if(name==='dashboard')renderDashboard();
+  if(name==='dashboard'){renderDashboard();renderAnalytics();}
   if(name==='incidents')renderIncidents();
   if(name==='submit')resetSubmitForm();
 }
@@ -650,16 +700,6 @@ function renderDashboard(){
   }
   /* Open badge */
   document.getElementById('open-badge').style.display=open>0&&isAdmin?'inline-block':'none';
-  /* Recent incidents — apply _activeFilter if set */
-  var filtered=_activeFilter==='Overdue'
-    ?mine.filter(function(i){var s=getSLAStatus(i);return s&&s.overdue;})
-    :(_activeFilter?mine.filter(function(i){return i.status===_activeFilter;}):mine);
-  var recent=filtered.slice().sort(function(a,b){return new Date(b.createdAt)-new Date(a.createdAt);}).slice(0,10);
-  var el=document.getElementById('recent-list');
-  var emptyMsg=_activeFilter?'No '+_activeFilter+' tickets':'No incidents yet';
-  var emptySub=_activeFilter?'No tickets with status: '+_activeFilter:'Submit your first IT incident using the New Incident tab';
-  if(!recent.length){el.innerHTML='<div class="empty-state"><div class="empty-icon">📋</div><div class="empty-title">'+emptyMsg+'</div><div class="empty-sub">'+emptySub+'</div></div>';return;}
-  el.innerHTML=recent.map(buildIncCard).join('');
 }
 
 /* ── INCIDENTS ── */
@@ -1149,6 +1189,94 @@ async function sendResolutionEmail(inc){
         toRecipients:[{emailAddress:{address:inc.submittedByEmail,name:inc.submittedBy}}]},
         saveToSentItems:false})});
   }catch(e){console.error('Resolution email failed',e);}
+}
+
+/* ── ANALYTICS ── */
+var _charts={};
+
+function renderAnalytics(){
+  if(!isAdmin)return;
+  var now=new Date();
+  var allInc=incidents;
+
+  var days=[];
+  for(var d=6;d>=0;d--){
+    var dd=new Date(now);
+    dd.setDate(dd.getDate()-d);
+    days.push(dd.toLocaleDateString('en-PH',{month:'short',day:'numeric'}));
+  }
+
+  /* Chart 1 — Ticket Volume */
+  var incoming=days.map(function(label){
+    return allInc.filter(function(i){
+      return new Date(i.createdAt).toLocaleDateString('en-PH',{month:'short',day:'numeric'})===label;
+    }).length;
+  });
+  var resolved=days.map(function(label){
+    return allInc.filter(function(i){
+      return i.status==='Resolved'&&i.updatedAt&&
+        new Date(i.updatedAt).toLocaleDateString('en-PH',{month:'short',day:'numeric'})===label;
+    }).length;
+  });
+  renderChart('chart-volume','bar',{
+    labels:days,
+    datasets:[
+      {label:'Incoming',data:incoming,backgroundColor:'rgba(204,34,68,0.7)',borderColor:'#cc2244',borderWidth:1},
+      {label:'Resolved',data:resolved,backgroundColor:'rgba(34,197,94,0.7)',borderColor:'#22c55e',borderWidth:1}
+    ]
+  },{scales:{x:{ticks:{color:'#71717a',font:{size:10}},grid:{color:'rgba(255,255,255,0.05)'}},y:{ticks:{color:'#71717a',font:{size:10},stepSize:1},grid:{color:'rgba(255,255,255,0.05)'},beginAtZero:true}},plugins:{legend:{labels:{color:'#a1a1aa',font:{size:10}}}}});
+
+  /* Chart 2 — Avg Turnaround Time */
+  var turnaround=days.map(function(label){
+    var res=allInc.filter(function(i){
+      return i.status==='Resolved'&&i.updatedAt&&i.createdAt&&
+        new Date(i.updatedAt).toLocaleDateString('en-PH',{month:'short',day:'numeric'})===label;
+    });
+    if(!res.length)return 0;
+    var totalHrs=res.reduce(function(sum,i){return sum+(new Date(i.updatedAt)-new Date(i.createdAt))/3600000;},0);
+    return Math.round(totalHrs/res.length*10)/10;
+  });
+  renderChart('chart-turnaround','line',{
+    labels:days,
+    datasets:[{label:'Avg Hours',data:turnaround,borderColor:'#f59e0b',backgroundColor:'rgba(245,158,11,0.1)',tension:0.4,fill:true,pointBackgroundColor:'#f59e0b',pointRadius:4}]
+  },{scales:{x:{ticks:{color:'#71717a',font:{size:10}},grid:{color:'rgba(255,255,255,0.05)'}},y:{ticks:{color:'#71717a',font:{size:10}},grid:{color:'rgba(255,255,255,0.05)'},beginAtZero:true}},plugins:{legend:{labels:{color:'#a1a1aa',font:{size:10}}}}});
+
+  /* Chart 3 — Tickets by Status */
+  var openC=allInc.filter(function(i){return i.status==='Open';}).length;
+  var progC=allInc.filter(function(i){return i.status==='In Progress';}).length;
+  var resC=allInc.filter(function(i){return i.status==='Resolved';}).length;
+  renderChart('chart-status','doughnut',{
+    labels:['Open','In Progress','Resolved'],
+    datasets:[{data:[openC,progC,resC],backgroundColor:['rgba(204,34,68,0.8)','rgba(245,158,11,0.8)','rgba(34,197,94,0.8)'],borderColor:['#cc2244','#f59e0b','#22c55e'],borderWidth:1}]
+  },{plugins:{legend:{position:'bottom',labels:{color:'#a1a1aa',font:{size:10},padding:8}}},cutout:'65%'});
+
+  /* Chart 4 — Tickets by Category */
+  var cats=['Hardware Issue','Software Issue','Access Request','Network','Other'];
+  var catCounts=cats.map(function(c){return allInc.filter(function(i){return i.category===c;}).length;});
+  renderChart('chart-category','bar',{
+    labels:cats.map(function(c){return c.replace(' Issue','').replace(' Request','');}),
+    datasets:[{label:'Tickets',data:catCounts,backgroundColor:'rgba(99,102,241,0.7)',borderColor:'#6366f1',borderWidth:1}]
+  },{indexAxis:'y',scales:{x:{ticks:{color:'#71717a',font:{size:10}},grid:{color:'rgba(255,255,255,0.05)'},beginAtZero:true},y:{ticks:{color:'#71717a',font:{size:10}},grid:{color:'rgba(255,255,255,0.05)'}}},plugins:{legend:{display:false}}});
+
+  /* Chart 5 — SLA Compliance Rate */
+  var urgencies=['Critical','High','Medium','Low'];
+  var slaRates=urgencies.map(function(u){
+    var uInc=allInc.filter(function(i){return i.urgency===u&&i.status==='Resolved'&&i.createdAt&&i.updatedAt;});
+    if(!uInc.length)return 0;
+    var compliant=uInc.filter(function(i){return(new Date(i.updatedAt)-new Date(i.createdAt))/3600000<=SLA_HOURS[u];}).length;
+    return Math.round(compliant/uInc.length*100);
+  });
+  renderChart('chart-sla','bar',{
+    labels:urgencies,
+    datasets:[{label:'% Within SLA',data:slaRates,backgroundColor:slaRates.map(function(r){return r>=80?'rgba(34,197,94,0.7)':r>=50?'rgba(245,158,11,0.7)':'rgba(204,34,68,0.7)';}),borderColor:slaRates.map(function(r){return r>=80?'#22c55e':r>=50?'#f59e0b':'#cc2244';}),borderWidth:1}]
+  },{scales:{x:{ticks:{color:'#71717a',font:{size:10}},grid:{color:'rgba(255,255,255,0.05)'}},y:{ticks:{color:'#71717a',font:{size:10},callback:function(v){return v+'%';}},grid:{color:'rgba(255,255,255,0.05)'},beginAtZero:true,max:100}},plugins:{legend:{display:false}}});
+}
+
+function renderChart(id,type,data,options){
+  var canvas=document.getElementById(id);
+  if(!canvas)return;
+  if(_charts[id]){_charts[id].destroy();}
+  _charts[id]=new Chart(canvas.getContext('2d'),{type:type,data:data,options:Object.assign({responsive:true,maintainAspectRatio:true,animation:{duration:600}},options)});
 }
 
 /* ── INIT ── */
