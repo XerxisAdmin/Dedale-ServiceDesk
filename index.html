@@ -332,7 +332,7 @@ select.form-control{cursor:pointer;}
 const CLIENT_ID='efcad5dc-5a65-4e5a-906b-54db03b58824';
 const TENANT_ID='115d6eac-9c52-4e39-9c4c-f8d77ede8a9d';
 const FILE_NAME='dedale-servicedesk-data.json';
-const SHARED_FILE_URL='https://graph.microsoft.com/v1.0/sites/softwareclub.sharepoint.com,b82a470c-0892-4515-8605-dcca9e46a63d,d6799185-7c1f-4a8f-bac2-ae16fdb46e5b/drive/root:/dedale-servicedesk-data.json:/content'
+const SHARED_FILE_URL='https://graph.microsoft.com/v1.0/sites/softwareclub.sharepoint.com,b82a470c-0892-4515-8605-dcca9e46a63d,d6799185-7c1f-4a8f-bac2-ae16fdb46e5b/drive/root:/ServiceDesk/dedale-servicedesk-data.json:/content'
 const ADMIN_DRIVE_ID='b!JJGdEs4axkKFpdu0ZTYTO_7UT8rCzcFLjfdSqHtuqczk_Sy9CC9jTqYSgnfFkEuR';
 const ADMIN_EMAIL='xerxis.dalanon@dedale.com';
 const SD_CLEAR_PIN_KEY='sd_clear_pin';
@@ -456,6 +456,7 @@ async function loadData(){
 }
 
 async function saveData(){
+  _isSaving=true; /* Lock — prevent auto-refresh from reading stale data during write */
   updateSyncStatus('syncing');
   try{
     /* Always read the full file first, then merge, so no user overwrites another's tickets */
@@ -495,7 +496,10 @@ async function saveData(){
       console.error('[saveData] Error:',r.status,await r.text());
       updateSyncStatus('error');
     }
-  }catch(e){console.error('[saveData]',e);updateSyncStatus('offline');updateOnlineUI(false);}
+    /* Wait 800ms for SharePoint to commit before releasing lock */
+    await new Promise(function(res){setTimeout(res,800);});
+    _isSaving=false;
+  }catch(e){console.error('[saveData]',e);updateSyncStatus('offline');updateOnlineUI(false);_isSaving=false;}
 }
 
 async function saveOneIncident(inc){
@@ -506,6 +510,7 @@ async function saveOneIncident(inc){
 var _autoRefreshInterval=null;
 var _autoRefreshSecs=5;
 var _isRefreshing=false;
+var _isSaving=false; /* Lock flag — prevents loadData from running during a save */
 
 function startAutoRefresh(){
   if(_autoRefreshInterval)clearInterval(_autoRefreshInterval);
@@ -516,6 +521,7 @@ function startAutoRefresh(){
 
 async function autoRefreshTick(){
   if(_isRefreshing)return;
+  if(_isSaving)return; /* Don't load while a save is committing to SharePoint */
   _isRefreshing=true;
   try{
     var prevCount=incidents.length;
