@@ -312,6 +312,21 @@ select.form-control{cursor:pointer;}
         <label class="form-label">Device / Equipment (optional)</label>
         <input type="text" class="form-control" id="s-device" placeholder="e.g. Lenovo 15IRH10, Serial: pf532n0">
       </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">Due Date (optional)</label>
+          <input type="date" class="form-control" id="s-duedate">
+        </div>
+        <div class="form-group">
+          <label class="form-label">URL / Helpful Link (optional)</label>
+          <input type="url" class="form-control" id="s-url" placeholder="https://...">
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Attachment (optional)</label>
+        <input type="file" class="form-control" id="s-attachment" accept="image/*,.pdf,.doc,.docx,.txt,.xlsx,.csv" style="padding:6px;">
+        <div style="font-size:10px;color:var(--text3);margin-top:4px;">Max 4MB — images, PDF, Word, Excel accepted</div>
+      </div>
       <div style="display:flex;gap:10px;margin-top:8px;">
         <button class="btn btn-primary" id="submit-inc-btn" onclick="submitIncident()">&#9654; SUBMIT INCIDENT</button>
         <button class="btn btn-outline" onclick="resetSubmitForm()">CLEAR</button>
@@ -658,6 +673,8 @@ function buildIncCard(inc){
     +'<span>🕐 '+formatDate(inc.createdAt)+'</span>'
     +(inc.assignedTo?'<span style="color:var(--green);">⚙ '+inc.assignedTo+'</span>':'')
     +(inc.device?'<span>💻 '+inc.device+'</span>':'')
+    +(inc.dueDate?'<span style="color:var(--gold);">📅 '+inc.dueDate+'</span>':'')
+    +(inc.attachment?'<span style="color:var(--text3);">📎 '+inc.attachment.name+'</span>':'')
     +'</div>'
     +'</div>';
 }
@@ -678,6 +695,15 @@ function openDetail(id){
     +(inc.assignedTo?'<div class="detail-box"><div class="detail-label">Assigned To</div><div class="detail-value"><span style="color:var(--green);font-weight:700;">'+inc.assignedTo+'</span></div></div>':'')
     +'</div>'
     +'<div class="detail-box" style="margin-bottom:16px;"><div class="detail-label">Description</div><div class="detail-value" style="font-weight:400;font-size:13px;line-height:1.6;color:var(--text2);">'+inc.description+'</div></div>';
+  if(inc.dueDate){body+='<div class="detail-box" style="margin-bottom:10px;"><div class="detail-label">Due Date</div><div class="detail-value" style="color:var(--gold);">📅 '+inc.dueDate+'</div></div>';}
+  if(inc.url){body+='<div class="detail-box" style="margin-bottom:10px;"><div class="detail-label">Helpful Link</div><div class="detail-value"><a href="'+inc.url+'" target="_blank" style="color:var(--crimson);">🔗 '+inc.url+'</a></div></div>';}
+  if(inc.attachment){
+    var isImg=inc.attachment.type&&inc.attachment.type.startsWith('image/');
+    body+='<div class="detail-box" style="margin-bottom:10px;"><div class="detail-label">Attachment</div><div class="detail-value">';
+    if(isImg){body+='<img src="data:'+inc.attachment.type+';base64,'+inc.attachment.data+'" style="max-width:100%;max-height:200px;border-radius:2px;margin-bottom:6px;display:block;" />';}
+    body+='<a href="data:'+inc.attachment.type+';base64,'+inc.attachment.data+'" download="'+inc.attachment.name+'" style="color:var(--crimson);font-size:12px;">📎 Download: '+inc.attachment.name+'</a>';
+    body+='</div></div>';
+  }
 
   /* Conversation Thread */
   body+='<div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border2);">';
@@ -866,8 +892,9 @@ function submitSdPin(){
 
 /* ── SUBMIT ── */
 function resetSubmitForm(){
-  ['s-title','s-desc','s-device'].forEach(function(id){var el=document.getElementById(id);if(el)el.value='';});
+  ['s-title','s-desc','s-device','s-duedate','s-url'].forEach(function(id){var el=document.getElementById(id);if(el)el.value='';});
   ['s-category','s-urgency'].forEach(function(id){var el=document.getElementById(id);if(el)el.value='';});
+  var att=document.getElementById('s-attachment');if(att)att.value='';
 }
 
 async function submitIncident(){
@@ -879,6 +906,29 @@ async function submitIncident(){
   var urgency=document.getElementById('s-urgency').value;
   var desc=document.getElementById('s-desc').value.trim();
   var device=document.getElementById('s-device').value.trim();
+  var duedate=document.getElementById('s-duedate').value||null;
+  var url=document.getElementById('s-url').value.trim()||null;
+  /* Handle attachment — convert to base64 */
+  var attachmentData=null;
+  var attachmentName=null;
+  var attachmentType=null;
+  var attFile=document.getElementById('s-attachment').files[0];
+  if(attFile){
+    if(attFile.size>4*1024*1024){
+      if(submitBtn){submitBtn.disabled=false;submitBtn.innerHTML='&#9654; SUBMIT INCIDENT';}
+      toast('Attachment too large — max 4MB.');return;
+    }
+    try{
+      attachmentData=await new Promise(function(res,rej){
+        var r=new FileReader();
+        r.onload=function(){res(r.result.split(',')[1]);};
+        r.onerror=rej;
+        r.readAsDataURL(attFile);
+      });
+      attachmentName=attFile.name;
+      attachmentType=attFile.type;
+    }catch(e){console.warn('Attachment read failed',e);}
+  }
   if(!title||!category||!urgency||!desc){
     if(submitBtn){submitBtn.disabled=false;submitBtn.innerHTML='&#9654; SUBMIT INCIDENT';}
     toast('Please fill in all required fields.');return;
@@ -890,6 +940,9 @@ async function submitIncident(){
     urgency:urgency,
     description:desc,
     device:device||null,
+    dueDate:duedate,
+    url:url,
+    attachment:attachmentData?{name:attachmentName,type:attachmentType,data:attachmentData}:null,
     status:'Open',
     submittedBy:currentUser.name||currentUser.username,
     submittedByEmail:currentUser.username,
