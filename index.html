@@ -69,6 +69,13 @@ body::before{content:'';position:fixed;inset:0;pointer-events:none;background:re
 .stat-value.gold{color:var(--gold);}
 .stat-value.green{color:var(--green);}
 .stat-value.orange{color:var(--orange);}
+.stat-card{cursor:pointer;transition:border 0.15s,box-shadow 0.15s;}
+.stat-card:hover{border-color:rgba(255,255,255,0.2);}
+.stat-card.active-filter{box-shadow:0 0 0 2px var(--crimson);border-color:var(--crimson);}
+.stat-card.active-filter-gold{box-shadow:0 0 0 2px var(--gold);border-color:var(--gold);}
+.stat-card.active-filter-green{box-shadow:0 0 0 2px var(--green);border-color:var(--green);}
+.stat-card.active-filter-orange{box-shadow:0 0 0 2px var(--orange);border-color:var(--orange);}
+.filter-active-label{font-size:10px;color:var(--text3);font-family:'Share Tech Mono',monospace;letter-spacing:1px;margin-bottom:6px;}
 /* Filters */
 .filters{display:flex;gap:10px;margin-bottom:16px;flex-wrap:wrap;}
 select.f-select{background:var(--surface);border:1px solid var(--border2);color:var(--text2);padding:7px 12px;font-family:'Share Tech Mono',monospace;font-size:12px;letter-spacing:1px;}
@@ -214,10 +221,10 @@ select.form-control{cursor:pointer;}
       </div>
     </div>
     <div class="stats-row" id="stats-row">
-      <div class="stat-card"><div class="stat-label">Open</div><div class="stat-value" id="stat-open">0</div></div>
-      <div class="stat-card"><div class="stat-label">In Progress</div><div class="stat-value gold" id="stat-progress">0</div></div>
-      <div class="stat-card"><div class="stat-label">Resolved</div><div class="stat-value green" id="stat-resolved">0</div></div>
-      <div class="stat-card"><div class="stat-label">Total</div><div class="stat-value orange" id="stat-total">0</div></div>
+      <div class="stat-card" id="scard-open" onclick="toggleDashFilter('Open')"><div class="stat-label">• OPEN</div><div class="stat-value" id="stat-open">0</div></div>
+      <div class="stat-card" id="scard-progress" onclick="toggleDashFilter('In Progress')"><div class="stat-label">• IN PROGRESS</div><div class="stat-value gold" id="stat-progress">0</div></div>
+      <div class="stat-card" id="scard-resolved" onclick="toggleDashFilter('Resolved')"><div class="stat-label">• RESOLVED</div><div class="stat-value green" id="stat-resolved">0</div></div>
+      <div class="stat-card" id="scard-total" onclick="toggleDashFilter(null)"><div class="stat-label">• TOTAL</div><div class="stat-value orange" id="stat-total">0</div></div>
     </div>
     <div id="recent-incidents">
       <div class="page-title" style="font-size:11px;margin-bottom:12px;">RECENT INCIDENTS</div>
@@ -511,6 +518,7 @@ var _autoRefreshInterval=null;
 var _autoRefreshSecs=5;
 var _isRefreshing=false;
 var _isSaving=false; /* Lock flag — prevents loadData from running during a save */
+var _activeFilter=null; /* Dashboard filter: null=all, 'Open','In Progress','Resolved' */
 
 function startAutoRefresh(){
   if(_autoRefreshInterval)clearInterval(_autoRefreshInterval);
@@ -601,9 +609,25 @@ function renderDashboard(){
 }
 
 /* ── INCIDENTS ── */
+function toggleDashFilter(status){
+  _activeFilter=(_activeFilter===status)?null:status;
+  /* Update card highlight */
+  ['scard-open','scard-progress','scard-resolved','scard-total'].forEach(function(id){
+    var el=document.getElementById(id);
+    if(el){el.classList.remove('active-filter','active-filter-gold','active-filter-green','active-filter-orange');}
+  });
+  if(_activeFilter==='Open'){document.getElementById('scard-open').classList.add('active-filter');}
+  else if(_activeFilter==='In Progress'){document.getElementById('scard-progress').classList.add('active-filter-gold');}
+  else if(_activeFilter==='Resolved'){document.getElementById('scard-resolved').classList.add('active-filter-green');}
+  renderDashboard();
+  renderIncidents();
+  /* Switch to dashboard tab so user sees filtered results */
+  showTab('dashboard');
+}
+
 function renderIncidents(){
   var mine=isAdmin?incidents:incidents.filter(function(i){return i.submittedByEmail===currentUser.username;});
-  var fs=document.getElementById('f-status')?document.getElementById('f-status').value:'';
+  var fs=_activeFilter||( document.getElementById('f-status')?document.getElementById('f-status').value:'');
   var fc=document.getElementById('f-category')?document.getElementById('f-category').value:'';
   var fu=document.getElementById('f-urgency')?document.getElementById('f-urgency').value:'';
   var filtered=mine.filter(function(i){
