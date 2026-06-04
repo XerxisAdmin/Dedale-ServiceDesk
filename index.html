@@ -538,6 +538,9 @@ async function autoRefreshTick(){
       var diff=incidents.length-prevCount;
       toast('🔔 '+diff+' new ticket'+(diff>1?'s':'')+' received');
     }
+    /* Re-render but preserve active filter */
+    renderDashboard();
+    renderIncidents();
     updateRefreshIndicator(true);
   }catch(e){updateRefreshIndicator(false);}
   _isRefreshing=false;
@@ -601,16 +604,20 @@ function renderDashboard(){
   document.getElementById('stat-total').textContent=mine.length;
   /* Open badge */
   document.getElementById('open-badge').style.display=open>0&&isAdmin?'inline-block':'none';
-  /* Recent 5 */
-  var recent=mine.slice().sort(function(a,b){return new Date(b.createdAt)-new Date(a.createdAt);}).slice(0,5);
+  /* Recent incidents — apply _activeFilter if set */
+  var filtered=_activeFilter?mine.filter(function(i){return i.status===_activeFilter;}):mine;
+  var recent=filtered.slice().sort(function(a,b){return new Date(b.createdAt)-new Date(a.createdAt);}).slice(0,10);
   var el=document.getElementById('recent-list');
-  if(!recent.length){el.innerHTML='<div class="empty-state"><div class="empty-icon">📋</div><div class="empty-title">No incidents yet</div><div class="empty-sub">Submit your first IT incident using the New Incident tab</div></div>';return;}
+  var emptyMsg=_activeFilter?'No '+_activeFilter+' tickets':'No incidents yet';
+  var emptySub=_activeFilter?'No tickets with status: '+_activeFilter:'Submit your first IT incident using the New Incident tab';
+  if(!recent.length){el.innerHTML='<div class="empty-state"><div class="empty-icon">📋</div><div class="empty-title">'+emptyMsg+'</div><div class="empty-sub">'+emptySub+'</div></div>';return;}
   el.innerHTML=recent.map(buildIncCard).join('');
 }
 
 /* ── INCIDENTS ── */
 function toggleDashFilter(status){
   _activeFilter=(_activeFilter===status)?null:status;
+  console.log('[Filter] Active filter set to:', _activeFilter);
   /* Update card highlight */
   ['scard-open','scard-progress','scard-resolved','scard-total'].forEach(function(id){
     var el=document.getElementById(id);
@@ -621,8 +628,6 @@ function toggleDashFilter(status){
   else if(_activeFilter==='Resolved'){document.getElementById('scard-resolved').classList.add('active-filter-green');}
   renderDashboard();
   renderIncidents();
-  /* Switch to dashboard tab so user sees filtered results */
-  showTab('dashboard');
 }
 
 function renderIncidents(){
