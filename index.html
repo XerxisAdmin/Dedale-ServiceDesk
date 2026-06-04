@@ -70,6 +70,7 @@ body::before{content:'';position:fixed;inset:0;pointer-events:none;background:re
 .stat-value.green{color:var(--green);}
 .stat-value.orange{color:var(--orange);}
 .stat-card{cursor:pointer;transition:border 0.15s,box-shadow 0.15s;}
+@keyframes pulse-red{0%,100%{box-shadow:0 0 0 2px rgba(204,34,68,0.4);}50%{box-shadow:0 0 0 4px rgba(204,34,68,0.8);}}
 .stat-card:hover{border-color:rgba(255,255,255,0.2);}
 .stat-card.active-filter{box-shadow:0 0 0 2px var(--crimson);border-color:var(--crimson);}
 .stat-card.active-filter-gold{box-shadow:0 0 0 2px var(--gold);border-color:var(--gold);}
@@ -224,6 +225,7 @@ select.form-control{cursor:pointer;}
       <div class="stat-card" id="scard-open" onclick="toggleDashFilter('Open')"><div class="stat-label">• OPEN</div><div class="stat-value" id="stat-open">0</div></div>
       <div class="stat-card" id="scard-progress" onclick="toggleDashFilter('In Progress')"><div class="stat-label">• IN PROGRESS</div><div class="stat-value gold" id="stat-progress">0</div></div>
       <div class="stat-card" id="scard-resolved" onclick="toggleDashFilter('Resolved')"><div class="stat-label">• RESOLVED</div><div class="stat-value green" id="stat-resolved">0</div></div>
+      <div class="stat-card" id="scard-overdue" onclick="toggleDashFilter('Overdue')" style="border-color:rgba(204,34,68,0.3);"><div class="stat-label" style="color:var(--crimson);">• OVERDUE</div><div class="stat-value" id="stat-overdue" style="color:var(--crimson);">0</div></div>
       <div class="stat-card" id="scard-total" onclick="toggleDashFilter(null)"><div class="stat-label">• TOTAL</div><div class="stat-value orange" id="stat-total">0</div></div>
     </div>
     <div id="recent-incidents">
@@ -308,19 +310,10 @@ select.form-control{cursor:pointer;}
         <label class="form-label">Description <span class="req">*</span></label>
         <textarea class="form-control" id="s-desc" placeholder="Provide as much detail as possible — what happened, when, what you were doing, any error messages..."></textarea>
       </div>
+
       <div class="form-group">
-        <label class="form-label">Device / Equipment (optional)</label>
-        <input type="text" class="form-control" id="s-device" placeholder="e.g. Lenovo 15IRH10, Serial: pf532n0">
-      </div>
-      <div class="form-row">
-        <div class="form-group">
-          <label class="form-label">Due Date (optional)</label>
-          <input type="date" class="form-control" id="s-duedate">
-        </div>
-        <div class="form-group">
-          <label class="form-label">URL / Helpful Link (optional)</label>
-          <input type="url" class="form-control" id="s-url" placeholder="https://...">
-        </div>
+        <label class="form-label">URL / Helpful Link (optional)</label>
+        <input type="url" class="form-control" id="s-url" placeholder="https://...">
       </div>
       <div class="form-group">
         <label class="form-label">Attachment (optional)</label>
@@ -535,6 +528,36 @@ var _isRefreshing=false;
 var _isSaving=false; /* Lock flag — prevents loadData from running during a save */
 var _activeFilter=null; /* Dashboard filter: null=all, 'Open','In Progress','Resolved' */
 
+/* ── SLA CONFIG ── */
+var SLA_HOURS={'Critical':4,'High':8,'Medium':24,'Low':72};
+
+function getSLADeadline(inc){
+  var hrs=SLA_HOURS[inc.urgency]||24;
+  return new Date(new Date(inc.createdAt).getTime()+hrs*3600000);
+}
+
+function getSLAStatus(inc){
+  if(inc.status==='Resolved')return null; /* Resolved tickets don't count as overdue */
+  var deadline=getSLADeadline(inc);
+  var now=new Date();
+  var diffMs=deadline-now;
+  if(diffMs<0){
+    /* Overdue */
+    var overdueHrs=Math.abs(diffMs)/3600000;
+    if(overdueHrs<1)return{overdue:true,label:'⚠ OVERDUE '+Math.round(overdueHrs*60)+'m ago'};
+    if(overdueHrs<24)return{overdue:true,label:'⚠ OVERDUE '+Math.round(overdueHrs)+'h ago'};
+    return{overdue:true,label:'⚠ OVERDUE '+Math.round(overdueHrs/24)+'d ago'};
+  }else{
+    /* Due soon — warn if less than 25% of SLA remaining */
+    var totalMs=SLA_HOURS[inc.urgency]*3600000;
+    if(diffMs<totalMs*0.25){
+      if(diffMs<3600000)return{overdue:false,warning:true,label:'⏰ Due in '+Math.round(diffMs/60000)+'m'};
+      return{overdue:false,warning:true,label:'⏰ Due in '+Math.round(diffMs/3600000)+'h'};
+    }
+    return null;
+  }
+}
+
 function startAutoRefresh(){
   if(_autoRefreshInterval)clearInterval(_autoRefreshInterval);
   _autoRefreshInterval=setInterval(autoRefreshTick,_autoRefreshSecs*1000);
@@ -613,14 +636,24 @@ function renderDashboard(){
   var open=mine.filter(function(i){return i.status==='Open';}).length;
   var prog=mine.filter(function(i){return i.status==='In Progress';}).length;
   var res=mine.filter(function(i){return i.status==='Resolved';}).length;
+  var overdue=mine.filter(function(i){var s=getSLAStatus(i);return s&&s.overdue;}).length;
   document.getElementById('stat-open').textContent=open;
   document.getElementById('stat-progress').textContent=prog;
   document.getElementById('stat-resolved').textContent=res;
+  document.getElementById('stat-overdue').textContent=overdue;
   document.getElementById('stat-total').textContent=mine.length;
+  /* Flash overdue card if there are overdue tickets */
+  var overdueCard=document.getElementById('scard-overdue');
+  if(overdueCard){
+    if(overdue>0){overdueCard.style.animation='pulse-red 1.5s infinite';overdueCard.style.borderColor='var(--crimson)';}
+    else{overdueCard.style.animation='';overdueCard.style.borderColor='rgba(204,34,68,0.3)';}
+  }
   /* Open badge */
   document.getElementById('open-badge').style.display=open>0&&isAdmin?'inline-block':'none';
   /* Recent incidents — apply _activeFilter if set */
-  var filtered=_activeFilter?mine.filter(function(i){return i.status===_activeFilter;}):mine;
+  var filtered=_activeFilter==='Overdue'
+    ?mine.filter(function(i){var s=getSLAStatus(i);return s&&s.overdue;})
+    :(_activeFilter?mine.filter(function(i){return i.status===_activeFilter;}):mine);
   var recent=filtered.slice().sort(function(a,b){return new Date(b.createdAt)-new Date(a.createdAt);}).slice(0,10);
   var el=document.getElementById('recent-list');
   var emptyMsg=_activeFilter?'No '+_activeFilter+' tickets':'No incidents yet';
@@ -634,23 +667,26 @@ function toggleDashFilter(status){
   _activeFilter=(_activeFilter===status)?null:status;
   console.log('[Filter] Active filter set to:', _activeFilter);
   /* Update card highlight */
-  ['scard-open','scard-progress','scard-resolved','scard-total'].forEach(function(id){
+  ['scard-open','scard-progress','scard-resolved','scard-overdue','scard-total'].forEach(function(id){
     var el=document.getElementById(id);
     if(el){el.classList.remove('active-filter','active-filter-gold','active-filter-green','active-filter-orange');}
   });
   if(_activeFilter==='Open'){document.getElementById('scard-open').classList.add('active-filter');}
   else if(_activeFilter==='In Progress'){document.getElementById('scard-progress').classList.add('active-filter-gold');}
   else if(_activeFilter==='Resolved'){document.getElementById('scard-resolved').classList.add('active-filter-green');}
+  else if(_activeFilter==='Overdue'){document.getElementById('scard-overdue').classList.add('active-filter');}
   renderDashboard();
   renderIncidents();
 }
 
 function renderIncidents(){
   var mine=isAdmin?incidents:incidents.filter(function(i){return i.submittedByEmail===currentUser.username;});
-  var fs=_activeFilter||( document.getElementById('f-status')?document.getElementById('f-status').value:'');
+  var _overdueFilt=_activeFilter==='Overdue';
+  var fs=(!_overdueFilt&&_activeFilter)?_activeFilter:( document.getElementById('f-status')?document.getElementById('f-status').value:'');
   var fc=document.getElementById('f-category')?document.getElementById('f-category').value:'';
   var fu=document.getElementById('f-urgency')?document.getElementById('f-urgency').value:'';
   var filtered=mine.filter(function(i){
+    if(_overdueFilt){var s=getSLAStatus(i);return s&&s.overdue;}
     return(!fs||i.status===fs)&&(!fc||i.category===fc)&&(!fu||i.urgency===fu);
   }).sort(function(a,b){return new Date(b.createdAt)-new Date(a.createdAt);});
   var el=document.getElementById('inc-list');
@@ -665,15 +701,13 @@ function buildIncCard(inc){
     +'<span class="inc-id">'+inc.id+'</span>'
     +'<span class="inc-title">'+inc.title+'</span>'
     +'<span class="badge badge-'+sc+'">'+inc.status+'</span>'
-    +'<span class="badge badge-'+urgencyClass(inc.urgency)+'">'+inc.urgency+'</span>'
+    +'<span class="badge badge-'+urgencyClass(inc.urgency)+'">'+inc.urgency+'</span>'    +(function(){var s=getSLAStatus(inc);return s?'<span class="badge" style="background:'+(s.overdue?'rgba(204,34,68,0.2)':'rgba(245,158,11,0.15)')+';color:'+(s.overdue?'#ff4466':'#f59e0b')+';border:1px solid '+(s.overdue?'rgba(204,34,68,0.4)':'rgba(245,158,11,0.3)')+';">'+s.label+'</span>':'';})()
     +'</div>'
     +'<div class="inc-meta">'
     +'<span>📂 '+inc.category+'</span>'
     +'<span>👤 '+inc.submittedBy+'</span>'
     +'<span>🕐 '+formatDate(inc.createdAt)+'</span>'
     +(inc.assignedTo?'<span style="color:var(--green);">⚙ '+inc.assignedTo+'</span>':'')
-    +(inc.device?'<span>💻 '+inc.device+'</span>':'')
-    +(inc.dueDate?'<span style="color:var(--gold);">📅 '+inc.dueDate+'</span>':'')
     +(inc.attachment?'<span style="color:var(--text3);">📎 '+inc.attachment.name+'</span>':'')
     +'</div>'
     +'</div>';
@@ -691,11 +725,20 @@ function openDetail(id){
     +'<div class="detail-box"><div class="detail-label">Category</div><div class="detail-value">'+inc.category+'</div></div>'
     +'<div class="detail-box"><div class="detail-label">Submitted By</div><div class="detail-value">'+inc.submittedBy+'</div></div>'
     +'<div class="detail-box"><div class="detail-label">Submitted</div><div class="detail-value">'+formatDate(inc.createdAt)+'</div></div>'
-    +(inc.device?'<div class="detail-box"><div class="detail-label">Device</div><div class="detail-value">'+inc.device+'</div></div>':'')
+
     +(inc.assignedTo?'<div class="detail-box"><div class="detail-label">Assigned To</div><div class="detail-value"><span style="color:var(--green);font-weight:700;">'+inc.assignedTo+'</span></div></div>':'')
+    +(function(){
+      var hrs=SLA_HOURS[inc.urgency]||24;
+      var deadline=getSLADeadline(inc);
+      var s=getSLAStatus(inc);
+      var deadlineStr=deadline.toLocaleDateString('en-PH',{month:'short',day:'numeric',year:'numeric'})+' '+deadline.toLocaleTimeString('en-PH',{hour:'2-digit',minute:'2-digit'});
+      var color=s&&s.overdue?'var(--crimson)':s&&s.warning?'var(--gold)':'var(--green)';
+      var label=s?s.label:'✅ Within SLA';
+      return'<div class="detail-box"><div class="detail-label">SLA Deadline</div><div class="detail-value" style="color:'+color+';font-weight:700;">'+deadlineStr+'<br><span style="font-size:11px;">'+label+' ('+hrs+'h SLA for '+inc.urgency+')</span></div></div>';
+    })()
     +'</div>'
     +'<div class="detail-box" style="margin-bottom:16px;"><div class="detail-label">Description</div><div class="detail-value" style="font-weight:400;font-size:13px;line-height:1.6;color:var(--text2);">'+inc.description+'</div></div>';
-  if(inc.dueDate){body+='<div class="detail-box" style="margin-bottom:10px;"><div class="detail-label">Due Date</div><div class="detail-value" style="color:var(--gold);">📅 '+inc.dueDate+'</div></div>';}
+
   if(inc.url){body+='<div class="detail-box" style="margin-bottom:10px;"><div class="detail-label">Helpful Link</div><div class="detail-value"><a href="'+inc.url+'" target="_blank" style="color:var(--crimson);">🔗 '+inc.url+'</a></div></div>';}
   if(inc.attachment){
     var isImg=inc.attachment.type&&inc.attachment.type.startsWith('image/');
@@ -892,7 +935,7 @@ function submitSdPin(){
 
 /* ── SUBMIT ── */
 function resetSubmitForm(){
-  ['s-title','s-desc','s-device','s-duedate','s-url'].forEach(function(id){var el=document.getElementById(id);if(el)el.value='';});
+  ['s-title','s-desc','s-url'].forEach(function(id){var el=document.getElementById(id);if(el)el.value='';});
   ['s-category','s-urgency'].forEach(function(id){var el=document.getElementById(id);if(el)el.value='';});
   var att=document.getElementById('s-attachment');if(att)att.value='';
 }
@@ -905,8 +948,6 @@ async function submitIncident(){
   var category=document.getElementById('s-category').value;
   var urgency=document.getElementById('s-urgency').value;
   var desc=document.getElementById('s-desc').value.trim();
-  var device=document.getElementById('s-device').value.trim();
-  var duedate=document.getElementById('s-duedate').value||null;
   var url=document.getElementById('s-url').value.trim()||null;
   /* Handle attachment — convert to base64 */
   var attachmentData=null;
@@ -939,8 +980,6 @@ async function submitIncident(){
     category:category,
     urgency:urgency,
     description:desc,
-    device:device||null,
-    dueDate:duedate,
     url:url,
     attachment:attachmentData?{name:attachmentName,type:attachmentType,data:attachmentData}:null,
     status:'Open',
