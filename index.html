@@ -223,14 +223,7 @@ select.form-control{cursor:pointer;}
         <button class="btn btn-danger btn-sm" id="clear-inc-btn" onclick="clearAllIncidents()" style="display:none;">&#128465; Clear All Logs</button>
       </div>
     </div>
-    <!-- Stat cards row -->
-    <div class="stats-row" id="stats-row">
-      <div class="stat-card" id="scard-open" onclick="showTab('incidents');toggleDashFilter('Open')"><div class="stat-label">• OPEN</div><div class="stat-value" id="stat-open">0</div></div>
-      <div class="stat-card" id="scard-progress" onclick="showTab('incidents');toggleDashFilter('In Progress')"><div class="stat-label">• IN PROGRESS</div><div class="stat-value gold" id="stat-progress">0</div></div>
-      <div class="stat-card" id="scard-resolved" onclick="showTab('incidents');toggleDashFilter('Resolved')"><div class="stat-label">• RESOLVED</div><div class="stat-value green" id="stat-resolved">0</div></div>
-      <div class="stat-card" id="scard-overdue" onclick="showTab('incidents');toggleDashFilter('Overdue')" style="border-color:rgba(204,34,68,0.3);"><div class="stat-label" style="color:var(--crimson);">• OVERDUE</div><div class="stat-value" id="stat-overdue" style="color:var(--crimson);">0</div></div>
-      <div class="stat-card" id="scard-total" onclick="showTab('incidents');toggleDashFilter(null)"><div class="stat-label">• TOTAL</div><div class="stat-value orange" id="stat-total">0</div></div>
-    </div>
+
     <!-- Analytics Charts -->
     <div id="analytics-section" style="margin-top:24px;">
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">
@@ -271,11 +264,11 @@ select.form-control{cursor:pointer;}
     </div>
     <!-- Stat cards — shown for both admin and staff (staff sees own stats) -->
     <div class="stats-row" id="inc-stats-row" style="margin-bottom:20px;">
-      <div class="stat-card" id="scard-open" onclick="toggleDashFilter('Open')"><div class="stat-label">• OPEN</div><div class="stat-value" id="stat-open">0</div></div>
-      <div class="stat-card" id="scard-progress" onclick="toggleDashFilter('In Progress')"><div class="stat-label">• IN PROGRESS</div><div class="stat-value gold" id="stat-progress">0</div></div>
-      <div class="stat-card" id="scard-resolved" onclick="toggleDashFilter('Resolved')"><div class="stat-label">• RESOLVED</div><div class="stat-value green" id="stat-resolved">0</div></div>
-      <div class="stat-card" id="scard-overdue" onclick="toggleDashFilter('Overdue')" style="border-color:rgba(204,34,68,0.3);"><div class="stat-label" style="color:var(--crimson);">• OVERDUE</div><div class="stat-value" id="stat-overdue" style="color:var(--crimson);">0</div></div>
-      <div class="stat-card" id="scard-total" onclick="toggleDashFilter(null)"><div class="stat-label">• TOTAL</div><div class="stat-value orange" id="stat-total">0</div></div>
+      <div class="stat-card" id="scard-open" onclick="toggleDashFilter('Open')"><div class="stat-label">• OPEN</div><div class="stat-value" id="inc-stat-open">0</div></div>
+      <div class="stat-card" id="scard-progress" onclick="toggleDashFilter('In Progress')"><div class="stat-label">• IN PROGRESS</div><div class="stat-value gold" id="inc-stat-progress">0</div></div>
+      <div class="stat-card" id="scard-resolved" onclick="toggleDashFilter('Resolved')"><div class="stat-label">• RESOLVED</div><div class="stat-value green" id="inc-stat-resolved">0</div></div>
+      <div class="stat-card" id="scard-overdue" onclick="toggleDashFilter('Overdue')" style="border-color:rgba(204,34,68,0.3);"><div class="stat-label" style="color:var(--crimson);">• OVERDUE</div><div class="stat-value" id="inc-stat-overdue" style="color:var(--crimson);">0</div></div>
+      <div class="stat-card" id="scard-total" onclick="toggleDashFilter(null)"><div class="stat-label">• TOTAL</div><div class="stat-value orange" id="inc-stat-total">0</div></div>
     </div>
     <div class="filters">
       <select class="f-select" id="f-status" onchange="renderIncidents()">
@@ -687,11 +680,12 @@ function renderDashboard(){
   var prog=mine.filter(function(i){return i.status==='In Progress';}).length;
   var res=mine.filter(function(i){return i.status==='Resolved';}).length;
   var overdue=mine.filter(function(i){var s=getSLAStatus(i);return s&&s.overdue;}).length;
-  document.getElementById('stat-open').textContent=open;
-  document.getElementById('stat-progress').textContent=prog;
-  document.getElementById('stat-resolved').textContent=res;
-  document.getElementById('stat-overdue').textContent=overdue;
-  document.getElementById('stat-total').textContent=mine.length;
+  /* Update incidents tab stat cards */
+  ['inc-stat-open','stat-open'].forEach(function(id){var el=document.getElementById(id);if(el)el.textContent=open;});
+  ['inc-stat-progress','stat-progress'].forEach(function(id){var el=document.getElementById(id);if(el)el.textContent=prog;});
+  ['inc-stat-resolved','stat-resolved'].forEach(function(id){var el=document.getElementById(id);if(el)el.textContent=res;});
+  ['inc-stat-overdue','stat-overdue'].forEach(function(id){var el=document.getElementById(id);if(el)el.textContent=overdue;});
+  ['inc-stat-total','stat-total'].forEach(function(id){var el=document.getElementById(id);if(el)el.textContent=mine.length;});
   /* Flash overdue card if there are overdue tickets */
   var overdueCard=document.getElementById('scard-overdue');
   if(overdueCard){
