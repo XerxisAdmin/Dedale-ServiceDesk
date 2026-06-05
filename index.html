@@ -437,6 +437,29 @@ async function doLogin(){
   try{await msalInstance.loginRedirect({scopes:SCOPES,prompt:'select_account'});}catch(e){alert('Sign-in failed: '+e.message);}
 }
 
+async function refreshToken(){
+  /* Silently refresh the access token — called automatically on 401 */
+  try{
+    const accounts=msalInstance.getAllAccounts();
+    if(!accounts.length)return false;
+    const r=await msalInstance.acquireTokenSilent({scopes:SCOPES,account:accounts[0],forceRefresh:true});
+    accessToken=r.accessToken;
+    console.log('[Token] Silently refreshed');
+    return true;
+  }catch(e){
+    try{
+      const accounts=msalInstance.getAllAccounts();
+      const r=await msalInstance.acquireTokenPopup({scopes:SCOPES,account:accounts[0]});
+      accessToken=r.accessToken;
+      console.log('[Token] Refreshed via popup');
+      return true;
+    }catch(e2){
+      console.warn('[Token] Refresh failed — user may need to sign in again');
+      return false;
+    }
+  }
+}
+
 function doLogout(){
   msalInstance.logoutRedirect({account:currentUser});
 }
@@ -501,6 +524,11 @@ async function loadData(){
       nextIncNum=d.nextIncNum||1;
       clearedIds=d.clearedIds||[];
       console.log('[loadData] Loaded',all.length,'total tickets');
+    }else if(r.status===401){
+      console.warn('[loadData] 401 — refreshing token silently...');
+      const ok=await refreshToken();
+      if(ok){await loadData();return;}
+      updateSyncStatus('error');updateOnlineUI(false);return;
     }else if(r.status===404){
       incidents=[];nextIncNum=1;clearedIds=[];
       await saveData();
@@ -546,6 +574,12 @@ async function saveData(){
        headers:{'Authorization':'Bearer '+accessToken,'Content-Type':'application/json'},
        body:JSON.stringify(data,null,2)}
     );
+    if(r.status===401){
+      console.warn('[saveData] 401 — refreshing token silently...');
+      const ok=await refreshToken();
+      if(ok){await saveData();return;} /* Retry once with fresh token */
+      updateSyncStatus('error');_isSaving=false;return;
+    }
     if(r.ok){
       updateSyncStatus('saved');updateOnlineUI(true);
       setTimeout(function(){updateSyncStatus('connected');},2500);
