@@ -374,7 +374,11 @@ select.form-control{cursor:pointer;}
 const CLIENT_ID='efcad5dc-5a65-4e5a-906b-54db03b58824';
 const TENANT_ID='115d6eac-9c52-4e39-9c4c-f8d77ede8a9d';
 const FILE_NAME='dedale-servicedesk-data.json';
-const SHARED_FILE_URL='https://graph.microsoft.com/v1.0/sites/softwareclub.sharepoint.com,b82a470c-0892-4515-8605-dcca9e46a63d,d6799185-7c1f-4a8f-bac2-ae16fdb46e5b/drive/root:/ServiceDesk/dedale-servicedesk-data.json:/content'
+/* ── GITHUB STORAGE (replaces SharePoint) ── */
+const GITHUB_TOKEN='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';
+const GITHUB_REPO='XerxisAdmin/Dedale-ServiceDesk';
+const GITHUB_FILE='dedale-servicedesk-data.json';
+const GITHUB_API_URL='https://api.github.com/repos/'+GITHUB_REPO+'/contents/'+GITHUB_FILE;
 const ADMIN_DRIVE_ID='b!JJGdEs4axkKFpdu0ZTYTO_7UT8rCzcFLjfdSqHtuqczk_Sy9CC9jTqYSgnfFkEuR';
 const ADMIN_EMAIL='xerxis.dalanon@dedale.com';
 const SD_CLEAR_PIN_KEY='sd_clear_pin';
@@ -505,32 +509,39 @@ async function onLoggedIn(){
 /* ── DATA ── */
 
 /*
-  ARCHITECTURE: Single OneDrive file as shared database
-  - All tickets stored in one JSON file in admin's OneDrive
-  - Accessed via item ID (shared with all Dedale users)
-  - Admin reads/writes via me/drive
-  - Staff reads/writes via SHARED_FILE_URL (item ID URL)
+  ARCHITECTURE: Single GitHub file as shared database
+  - All tickets stored in dedale-servicedesk-data.json in the repo
+  - Read/written via the GitHub Contents API using GITHUB_TOKEN
+  - Every save uses the file SHA for optimistic concurrency
+  - New tickets are created via createIncidentAtomic() with 409-retry,
+    so simultaneous submissions never collide on the same INC number
+  - Microsoft SSO (MSAL) is used for identity + sending notification emails only
 */
 
 async function loadData(){
   incidents=[];
   nextIncNum=1;
   try{
-    const r=await fetch(SHARED_FILE_URL+'?v='+Date.now(),{headers:{'Authorization':'Bearer '+accessToken,'Cache-Control':'no-cache, no-store, must-revalidate','Pragma':'no-cache'}});
+    const r=await fetch(GITHUB_API_URL+'?t='+Date.now(),{
+      headers:{
+        'Authorization':'token '+GITHUB_TOKEN,
+        'Accept':'application/vnd.github.v3+json',
+        'Cache-Control':'no-cache'
+      }
+    });
     if(r.ok){
-      const d=await r.json();
+      const meta=await r.json();
+      /* GitHub returns base64-encoded content */
+      var raw=atob(meta.content.replace(/\n/g,''));
+      var d=JSON.parse(raw);
       var all=d.incidents||[];
       incidents=isAdmin?all:all.filter(function(i){return i&&i.submittedByEmail===currentUser.username;});
       nextIncNum=d.nextIncNum||1;
       clearedIds=d.clearedIds||[];
+      _githubFileSha=meta.sha; /* Store SHA for updates */
       console.log('[loadData] Loaded',all.length,'total tickets');
-    }else if(r.status===401){
-      console.warn('[loadData] 401 — refreshing token silently...');
-      const ok=await refreshToken();
-      if(ok){await loadData();return;}
-      updateSyncStatus('error');updateOnlineUI(false);return;
     }else if(r.status===404){
-      incidents=[];nextIncNum=1;clearedIds=[];
+      incidents=[];nextIncNum=1;clearedIds=[];_githubFileSha=null;
       await saveData();
     }else{
       console.error('[loadData] Error:',r.status);
@@ -542,21 +553,24 @@ async function loadData(){
 }
 
 async function saveData(){
-  _isSaving=true; /* Lock — prevent auto-refresh from reading stale data during write */
+  _isSaving=true;
   updateSyncStatus('syncing');
   try{
-    /* Always read the full file first, then merge, so no user overwrites another's tickets */
+    /* Merge with existing data unless clearing */
     var allIncidents=incidents;
     var allNextIncNum=nextIncNum;
     var allClearedIds=clearedIds;
     if(!_isClearing){
-      /* Pre-read merge — skip when clearing to prevent old data from being restored */
       try{
-        const rr=await fetch(SHARED_FILE_URL+'?v='+Date.now(),{headers:{'Authorization':'Bearer '+accessToken}});
+        const rr=await fetch(GITHUB_API_URL+'?t='+Date.now(),{
+          headers:{'Authorization':'token '+GITHUB_TOKEN,'Accept':'application/vnd.github.v3+json','Cache-Control':'no-cache'}
+        });
         if(rr.ok){
-          const dd=await rr.json();
+          const meta=await rr.json();
+          _githubFileSha=meta.sha;
+          var raw=atob(meta.content.replace(/\n/g,''));
+          var dd=JSON.parse(raw);
           var existing=dd.incidents||[];
-          /* Merge: keep all existing tickets, add/update any from current user's local copy */
           incidents.forEach(function(inc){
             var idx=existing.findIndex(function(e){return e.id===inc.id;});
             if(idx===-1){existing.push(inc);}
@@ -564,37 +578,36 @@ async function saveData(){
           });
           allIncidents=existing;
           allNextIncNum=Math.max(nextIncNum,dd.nextIncNum||1);
-          /* Merge clearedIds */
           (dd.clearedIds||[]).forEach(function(id){
             if(allClearedIds.indexOf(id)===-1){allClearedIds.push(id);}
           });
         }
-      }catch(e){console.warn('[saveData] Pre-read failed, writing local only',e);}
+      }catch(e){console.warn('[saveData] Pre-read failed',e);}
     }else{
       console.log('[saveData] Clearing — skipping pre-read merge');
     }
     var data={incidents:allIncidents,nextIncNum:allNextIncNum,clearedIds:allClearedIds,updatedAt:new Date().toISOString()};
-    const r=await fetch(SHARED_FILE_URL,
-      {method:'PUT',
-       headers:{'Authorization':'Bearer '+accessToken,'Content-Type':'application/json'},
-       body:JSON.stringify(data,null,2)}
-    );
-    if(r.status===401){
-      console.warn('[saveData] 401 — refreshing token silently...');
-      const ok=await refreshToken();
-      if(ok){await saveData();return;} /* Retry once with fresh token */
-      updateSyncStatus('error');_isSaving=false;return;
-    }
+    var body={
+      message:'[SD] Update service desk data',
+      content:btoa(unescape(encodeURIComponent(JSON.stringify(data,null,2))))
+    };
+    if(_githubFileSha){body.sha=_githubFileSha;}
+    const r=await fetch(GITHUB_API_URL,{
+      method:'PUT',
+      headers:{'Authorization':'token '+GITHUB_TOKEN,'Accept':'application/vnd.github.v3+json','Content-Type':'application/json'},
+      body:JSON.stringify(body)
+    });
     if(r.ok){
+      var rd=await r.json();
+      _githubFileSha=rd.content.sha; /* Update SHA for next save */
       updateSyncStatus('saved');updateOnlineUI(true);
       setTimeout(function(){updateSyncStatus('connected');},2500);
-      console.log('[saveData] Saved',allIncidents.length,'tickets');
+      console.log('[saveData] Saved',allIncidents.length,'tickets to GitHub');
     }else{
-      console.error('[saveData] Error:',r.status,await r.text());
+      var errText=await r.text();
+      console.error('[saveData] Error:',r.status,errText);
       updateSyncStatus('error');
     }
-    /* Wait 800ms for SharePoint to commit before releasing lock */
-    await new Promise(function(res){setTimeout(res,800);});
     _isSaving=false;
   }catch(e){console.error('[saveData]',e);updateSyncStatus('offline');updateOnlineUI(false);_isSaving=false;}
 }
@@ -609,6 +622,7 @@ var _autoRefreshSecs=5;
 var _isRefreshing=false;
 var _isSaving=false; /* Lock flag — prevents loadData from running during a save */
 var _isClearing=false; /* Lock flag — skip pre-read merge during clear all */
+var _githubFileSha=null; /* SHA of current GitHub file — required for updates */
 var _activeFilter=null; /* Dashboard filter: null=all, 'Open','In Progress','Resolved' */
 
 /* ── SLA CONFIG ── */
@@ -1094,7 +1108,7 @@ async function submitIncident(){
     toast('Please fill in all required fields.');return;
   }
   var inc={
-    id:genIncId(),
+    id:null, /* assigned atomically inside createIncidentAtomic() from a fresh read */
     title:title,
     category:category,
     urgency:urgency,
@@ -1108,33 +1122,94 @@ async function submitIncident(){
     updatedAt:new Date().toISOString(),
     notes:[]
   };
-  /* Load full file first to avoid overwriting other tickets */
+  /* Create the incident atomically — mints the ID from a fresh read of the
+     GitHub file and uses the file SHA for optimistic concurrency, so two
+     simultaneous submissions can never collide on the same INC number. */
   try{
-    const lr=await fetch(SHARED_FILE_URL,{headers:{'Authorization':'Bearer '+accessToken}});
-    if(lr.ok){
-      const ld=await lr.json();
-      var existing=ld.incidents||[];
-      /* Avoid duplicate */
-      if(!existing.find(function(i){return i.id===inc.id;})){
-        existing.push(inc);
-      }
-      incidents=existing;
-      nextIncNum=Math.max(nextIncNum,ld.nextIncNum||1);
-      clearedIds=ld.clearedIds||[];
-    }
-  }catch(e){}
-  await saveData();
+    await createIncidentAtomic(inc);
+  }catch(e){
+    console.error('[submitIncident] create failed',e);
+    if(submitBtn){submitBtn.disabled=false;submitBtn.innerHTML='&#9654; SUBMIT INCIDENT';}
+    toast('⚠ Submit failed — please try again.');
+    return;
+  }
   await sendNewIncidentEmail(inc);
   resetSubmitForm();
   toast(inc.id+' submitted successfully ✓');
   if(submitBtn){submitBtn.disabled=false;submitBtn.innerHTML='&#9654; SUBMIT INCIDENT';}
-  showTab('dashboard');
-  /* Small delay to let SharePoint finish writing before reading back */
+  /* Staff have no Dashboard tab — send them to their tickets instead */
+  showTab(isAdmin?'dashboard':'incidents');
+  /* Small delay to let GitHub finish committing before reading back */
   setTimeout(async function(){
     await loadData();
     renderDashboard();
     renderIncidents();
-  }, 1500);
+  }, 1200);
+}
+
+/* ── ATOMIC INCIDENT CREATE ──
+   Reads the latest file from GitHub, mints the next sequential ID from the
+   freshly-read counter, appends the incident, and writes back. If another
+   user committed in between, GitHub returns 409 (SHA mismatch) and we retry
+   with a fresh read. This is what prevents two tickets getting the same ID. */
+async function createIncidentAtomic(inc){
+  for(var attempt=0;attempt<6;attempt++){
+    try{
+      var sha=null;
+      var data={incidents:[],nextIncNum:1,clearedIds:[]};
+      const rr=await fetch(GITHUB_API_URL+'?t='+Date.now(),{
+        headers:{'Authorization':'token '+GITHUB_TOKEN,'Accept':'application/vnd.github.v3+json','Cache-Control':'no-cache'}
+      });
+      if(rr.ok){
+        const meta=await rr.json();
+        sha=meta.sha;
+        data=JSON.parse(atob(meta.content.replace(/\n/g,'')));
+        if(!data.incidents)data.incidents=[];
+        if(!data.nextIncNum)data.nextIncNum=1;
+        if(!data.clearedIds)data.clearedIds=[];
+      }else if(rr.status!==404){
+        throw new Error('Read failed: '+rr.status);
+      }
+      /* Mint the ID from the freshly-read counter — never from stale local state */
+      var num=data.nextIncNum;
+      inc.id='INC'+String(num).padStart(4,'0');
+      data.nextIncNum=num+1;
+      data.incidents.push(inc);
+      data.updatedAt=new Date().toISOString();
+      var body={
+        message:'[SD] New incident '+inc.id,
+        content:btoa(unescape(encodeURIComponent(JSON.stringify(data,null,2))))
+      };
+      if(sha)body.sha=sha;
+      const wr=await fetch(GITHUB_API_URL,{
+        method:'PUT',
+        headers:{'Authorization':'token '+GITHUB_TOKEN,'Accept':'application/vnd.github.v3+json','Content-Type':'application/json'},
+        body:JSON.stringify(body)
+      });
+      if(wr.ok){
+        const wd=await wr.json();
+        _githubFileSha=wd.content.sha;
+        /* Sync local state from what we just wrote */
+        incidents=isAdmin?data.incidents:data.incidents.filter(function(i){return i&&i.submittedByEmail===currentUser.username;});
+        nextIncNum=data.nextIncNum;
+        clearedIds=data.clearedIds;
+        console.log('[createIncidentAtomic] Created '+inc.id+' on attempt '+(attempt+1));
+        return inc;
+      }else if(wr.status===409){
+        /* Another submission won the race — back off briefly and retry */
+        console.warn('[createIncidentAtomic] 409 conflict, retrying ('+(attempt+1)+')');
+        await new Promise(function(res){setTimeout(res,200+Math.random()*300);});
+        continue;
+      }else{
+        var et=await wr.text();
+        throw new Error('Write failed: '+wr.status+' '+et);
+      }
+    }catch(e){
+      console.error('[createIncidentAtomic] attempt '+(attempt+1)+' error',e);
+      await new Promise(function(res){setTimeout(res,200+Math.random()*300);});
+    }
+  }
+  throw new Error('Could not create incident after 6 attempts');
 }
 
 /* ── EMAILS ── */
