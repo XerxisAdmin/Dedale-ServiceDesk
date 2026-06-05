@@ -950,9 +950,17 @@ async function executeClearAll(){
   clearedIds=[];
   incidents=[];
   nextIncNum=1;
+  _isSaving=true; /* Lock refresh during clear */
   await saveData();
+  /* Wait 2 seconds for SharePoint to fully commit the empty file before refreshing */
+  await new Promise(function(res){setTimeout(res,2000);});
+  incidents=[];
+  nextIncNum=1;
+  clearedIds=[];
+  _isSaving=false;
   renderDashboard();
   renderIncidents();
+  if(isAdmin)renderAnalytics();
   toast('All incidents cleared.');
   startAutoRefresh();
 }
