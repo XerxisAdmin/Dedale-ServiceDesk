@@ -516,7 +516,7 @@ async function loadData(){
   incidents=[];
   nextIncNum=1;
   try{
-    const r=await fetch(SHARED_FILE_URL,{headers:{'Authorization':'Bearer '+accessToken}});
+    const r=await fetch(SHARED_FILE_URL+'?v='+Date.now(),{headers:{'Authorization':'Bearer '+accessToken,'Cache-Control':'no-cache, no-store, must-revalidate','Pragma':'no-cache'}});
     if(r.ok){
       const d=await r.json();
       var all=d.incidents||[];
@@ -549,25 +549,30 @@ async function saveData(){
     var allIncidents=incidents;
     var allNextIncNum=nextIncNum;
     var allClearedIds=clearedIds;
-    try{
-      const rr=await fetch(SHARED_FILE_URL,{headers:{'Authorization':'Bearer '+accessToken}});
-      if(rr.ok){
-        const dd=await rr.json();
-        var existing=dd.incidents||[];
-        /* Merge: keep all existing tickets, add/update any from current user's local copy */
-        incidents.forEach(function(inc){
-          var idx=existing.findIndex(function(e){return e.id===inc.id;});
-          if(idx===-1){existing.push(inc);}
-          else{existing[idx]=inc;}
-        });
-        allIncidents=existing;
-        allNextIncNum=Math.max(nextIncNum,dd.nextIncNum||1);
-        /* Merge clearedIds */
-        (dd.clearedIds||[]).forEach(function(id){
-          if(allClearedIds.indexOf(id)===-1){allClearedIds.push(id);}
-        });
-      }
-    }catch(e){console.warn('[saveData] Pre-read failed, writing local only',e);}
+    if(!_isClearing){
+      /* Pre-read merge — skip when clearing to prevent old data from being restored */
+      try{
+        const rr=await fetch(SHARED_FILE_URL+'?v='+Date.now(),{headers:{'Authorization':'Bearer '+accessToken}});
+        if(rr.ok){
+          const dd=await rr.json();
+          var existing=dd.incidents||[];
+          /* Merge: keep all existing tickets, add/update any from current user's local copy */
+          incidents.forEach(function(inc){
+            var idx=existing.findIndex(function(e){return e.id===inc.id;});
+            if(idx===-1){existing.push(inc);}
+            else{existing[idx]=inc;}
+          });
+          allIncidents=existing;
+          allNextIncNum=Math.max(nextIncNum,dd.nextIncNum||1);
+          /* Merge clearedIds */
+          (dd.clearedIds||[]).forEach(function(id){
+            if(allClearedIds.indexOf(id)===-1){allClearedIds.push(id);}
+          });
+        }
+      }catch(e){console.warn('[saveData] Pre-read failed, writing local only',e);}
+    }else{
+      console.log('[saveData] Clearing — skipping pre-read merge');
+    }
     var data={incidents:allIncidents,nextIncNum:allNextIncNum,clearedIds:allClearedIds,updatedAt:new Date().toISOString()};
     const r=await fetch(SHARED_FILE_URL,
       {method:'PUT',
@@ -603,6 +608,7 @@ var _autoRefreshInterval=null;
 var _autoRefreshSecs=5;
 var _isRefreshing=false;
 var _isSaving=false; /* Lock flag — prevents loadData from running during a save */
+var _isClearing=false; /* Lock flag — skip pre-read merge during clear all */
 var _activeFilter=null; /* Dashboard filter: null=all, 'Open','In Progress','Resolved' */
 
 /* ── SLA CONFIG ── */
@@ -924,7 +930,20 @@ async function clearAllIncidents(){
 }
 
 async function executeClearAll(){
+  /* Lock EVERYTHING first before any async operations */
+  _isSaving=true;
+  _isClearing=true;
   if(_autoRefreshInterval){clearInterval(_autoRefreshInterval);_autoRefreshInterval=null;}
+  
+  /* Clear in-memory data immediately */
+  incidents=[];
+  nextIncNum=1;
+  clearedIds=[];
+  
+  /* Render empty state immediately so user sees 0 right away */
+  renderDashboard();
+  renderIncidents();
+  if(isAdmin)renderAnalytics();
   toast('Clearing... please wait.');
 
   /* Step 1: delete ALL [IT INCIDENT] emails from admin inbox */
@@ -946,18 +965,19 @@ async function executeClearAll(){
     }
   }catch(e){console.warn('[Clear] Inbox delete failed',e);}
 
-  /* Step 2: wipe SharePoint file */
-  clearedIds=[];
-  incidents=[];
-  nextIncNum=1;
-  _isSaving=true; /* Lock refresh during clear */
+  /* Step 2: wipe SharePoint file — _isClearing prevents pre-read merge */
   await saveData();
-  /* Wait 2 seconds for SharePoint to fully commit the empty file before refreshing */
-  await new Promise(function(res){setTimeout(res,2000);});
+  
+  /* Wait 3 seconds for SharePoint to fully commit */
+  await new Promise(function(res){setTimeout(res,3000);});
+  
+  /* Final reset */
   incidents=[];
   nextIncNum=1;
   clearedIds=[];
+  _isClearing=false;
   _isSaving=false;
+  
   renderDashboard();
   renderIncidents();
   if(isAdmin)renderAnalytics();
