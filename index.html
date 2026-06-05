@@ -525,8 +525,7 @@ async function loadData(){
     const r=await fetch(GITHUB_API_URL+'?t='+Date.now(),{
       headers:{
         'Authorization':'token '+GITHUB_TOKEN,
-        'Accept':'application/vnd.github.v3+json',
-        'Cache-Control':'no-cache'
+        'Accept':'application/vnd.github.v3+json'
       }
     });
     if(r.ok){
@@ -563,7 +562,7 @@ async function saveData(){
     if(!_isClearing){
       try{
         const rr=await fetch(GITHUB_API_URL+'?t='+Date.now(),{
-          headers:{'Authorization':'token '+GITHUB_TOKEN,'Accept':'application/vnd.github.v3+json','Cache-Control':'no-cache'}
+          headers:{'Authorization':'token '+GITHUB_TOKEN,'Accept':'application/vnd.github.v3+json'}
         });
         if(rr.ok){
           const meta=await rr.json();
@@ -1158,7 +1157,7 @@ async function createIncidentAtomic(inc){
       var sha=null;
       var data={incidents:[],nextIncNum:1,clearedIds:[]};
       const rr=await fetch(GITHUB_API_URL+'?t='+Date.now(),{
-        headers:{'Authorization':'token '+GITHUB_TOKEN,'Accept':'application/vnd.github.v3+json','Cache-Control':'no-cache'}
+        headers:{'Authorization':'token '+GITHUB_TOKEN,'Accept':'application/vnd.github.v3+json'}
       });
       if(rr.ok){
         const meta=await rr.json();
