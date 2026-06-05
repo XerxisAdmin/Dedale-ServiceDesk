@@ -1049,7 +1049,25 @@ async function submitIncident(){
   var category=document.getElementById('s-category').value;
   var urgency=document.getElementById('s-urgency').value;
   var desc=document.getElementById('s-desc').value.trim();
-  var url=document.getElementById('s-url').value.trim()||null;
+  var urlRaw=document.getElementById('s-url').value.trim();
+  /* Validate URL if provided */
+  if(urlRaw){
+    try{
+      var urlObj=new URL(urlRaw);
+      if(urlObj.protocol!=='http:'&&urlObj.protocol!=='https:'){
+        if(submitBtn){submitBtn.disabled=false;submitBtn.innerHTML='&#9654; SUBMIT INCIDENT';}
+        toast('⚠ Invalid URL — must start with http:// or https://');
+        document.getElementById('s-url').focus();
+        return;
+      }
+    }catch(e){
+      if(submitBtn){submitBtn.disabled=false;submitBtn.innerHTML='&#9654; SUBMIT INCIDENT';}
+      toast('⚠ Invalid URL — please enter a valid link or leave it blank');
+      document.getElementById('s-url').focus();
+      return;
+    }
+  }
+  var url=urlRaw||null;
   /* Handle attachment — convert to base64 */
   var attachmentData=null;
   var attachmentName=null;
