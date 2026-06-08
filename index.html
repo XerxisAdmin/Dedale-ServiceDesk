@@ -572,25 +572,13 @@ async function ensureList(){
       if(found){_spListId=found.id;console.log('[ensureList] Found list',_spListId);return _spListId;}
     }else{console.error('[ensureList] lookup failed',r.status,await r.text());}
   }catch(e){console.error('[ensureList] lookup error',e);}
-  if(!isAdmin){console.warn('[ensureList] List missing; admin must sign in first to create it');return null;}
-  try{
-    const body={displayName:SP_LIST_NAME,list:{template:'genericList'},columns:[
-      {name:'Category',text:{}},
-      {name:'Urgency',text:{}},
-      {name:'Description',text:{allowMultipleLines:true}},
-      {name:'HelpfulUrl',text:{}},
-      {name:'Status',text:{}},
-      {name:'SubmittedBy',text:{}},
-      {name:'SubmittedByEmail',text:{}},
-      {name:'AssignedTo',text:{}},
-      {name:'ResolvedAt',text:{}},
-      {name:'NotesJson',text:{allowMultipleLines:true}}
-    ]};
-    const r=await gfetch(GRAPH+'/sites/'+siteId+'/lists',{method:'POST',body:JSON.stringify(body)});
-    if(r.ok){const d=await r.json();_spListId=d.id;console.log('[ensureList] Created list',_spListId);
-      toast('Ticket list created ✓');return _spListId;}
-    console.error('[ensureList] create failed',r.status,await r.text());
-  }catch(e){console.error('[ensureList] create error',e);}
+  if(!isAdmin){console.warn('[ensureList] List missing; admin must sign in first');return null;}
+  /* The ServiceDeskTickets list is created manually in SharePoint (the API
+     create call requires site-collection-admin rights this account lacks).
+     If we get here the list wasn't found by name — surface a clear error
+     instead of attempting a POST /lists that would 403. */
+  console.error('[ensureList] List "'+SP_LIST_NAME+'" not found on the site. It must be created manually in SharePoint.');
+  toast('⚠ Ticket list not found on the site.');
   return null;
 }
 
