@@ -374,19 +374,20 @@ const TENANT_ID='115d6eac-9c52-4e39-9c4c-f8d77ede8a9d';
 const ADMIN_EMAIL='xerxis.dalanon@dedale.com';
 const SD_CLEAR_PIN_KEY='sd_clear_pin';
 /* ── SHAREPOINT LIST STORAGE ──
-   Tickets live as items in a SharePoint List. Each user reads/writes with
-   their own Microsoft token (Sites.ReadWrite.All, admin-consented). The list
-   is auto-created on first admin sign-in. SharePoint assigns every item a
-   unique numeric ID, so duplicate INC numbers are impossible. */
+   Tickets live as items in a SharePoint List on the ITServiceDesk Team site.
+   Each user reads/writes with their own Microsoft token (Sites.ReadWrite.All).
+   The list is auto-created on first admin sign-in.
+   SharePoint assigns unique item IDs so INC numbers can never collide. */
 const GRAPH='https://graph.microsoft.com/v1.0';
-const SP_SITE_ID='softwareclub.sharepoint.com,b82a470c-0892-4515-8605-dcca9e46a63d,d6799185-7c1f-4a8f-bac2-ae16fdb46e5b';
+const SP_SITE_PATH='softwareclub.sharepoint.com:/sites/ITServiceDesk'; /* path-based — no hardcoded GUID */
 const SP_LIST_NAME='ServiceDeskTickets';
 const SCOPES=['Sites.ReadWrite.All','User.Read','User.Read.All','Mail.Send','Mail.Read','Mail.ReadWrite'];
 
 /* ── STATE ── */
 let msalInstance,accessToken,currentUser,isAdmin=false;
 let incidents=[];
-let _spListId=null; /* resolved SharePoint list id, cached after first lookup */
+let _spListId=null;   /* resolved SharePoint list id, cached after first lookup */
+let _spSiteId=null;   /* resolved SharePoint site id, cached after first lookup */
 
 /* ── SYNC STATUS ── */
 function updateSyncStatus(s){
@@ -547,11 +548,24 @@ async function gfetch(url,opts){
   return r;
 }
 
+/* Resolve the SharePoint site id from the path — cached after first call */
+async function resolveSiteId(){
+  if(_spSiteId)return _spSiteId;
+  try{
+    const r=await gfetch(GRAPH+'/sites/'+SP_SITE_PATH+'?$select=id');
+    if(r.ok){const d=await r.json();_spSiteId=d.id;console.log('[resolveSiteId] Site ID:',_spSiteId);return _spSiteId;}
+    console.error('[resolveSiteId] failed',r.status,await r.text());
+  }catch(e){console.error('[resolveSiteId] error',e);}
+  return null;
+}
+
 /* Resolve the list id by name; create the list (admin only) if it doesn't exist */
 async function ensureList(){
   if(_spListId)return _spListId;
+  const siteId=await resolveSiteId();
+  if(!siteId){console.error('[ensureList] Could not resolve site ID');return null;}
   try{
-    const r=await gfetch(GRAPH+'/sites/'+SP_SITE_ID+'/lists?$select=id,displayName&$top=200');
+    const r=await gfetch(GRAPH+'/sites/'+siteId+'/lists?$select=id,displayName&$top=200');
     if(r.ok){
       const d=await r.json();
       const found=(d.value||[]).find(function(l){return l.displayName===SP_LIST_NAME;});
@@ -572,7 +586,7 @@ async function ensureList(){
       {name:'ResolvedAt',text:{}},
       {name:'NotesJson',text:{allowMultipleLines:true}}
     ]};
-    const r=await gfetch(GRAPH+'/sites/'+SP_SITE_ID+'/lists',{method:'POST',body:JSON.stringify(body)});
+    const r=await gfetch(GRAPH+'/sites/'+siteId+'/lists',{method:'POST',body:JSON.stringify(body)});
     if(r.ok){const d=await r.json();_spListId=d.id;console.log('[ensureList] Created list',_spListId);
       toast('Ticket list created ✓');return _spListId;}
     console.error('[ensureList] create failed',r.status,await r.text());
@@ -627,7 +641,7 @@ async function loadData(){
   try{
     const listId=await ensureList();
     if(!listId){incidents=[];updateSyncStatus('error');renderDashboard();renderIncidents();return;}
-    const r=await gfetch(GRAPH+'/sites/'+SP_SITE_ID+'/lists/'+listId+'/items?expand=fields&$top=500');
+    const r=await gfetch(GRAPH+'/sites/'+_spSiteId+'/lists/'+listId+'/items?expand=fields&$top=500');
     if(r.ok){
       const d=await r.json();
       var all=(d.value||[]).map(spItemToInc);
@@ -652,7 +666,7 @@ async function createIncident(inc){
   if(!listId)throw new Error('Ticket list unavailable');
   _isSaving=true;updateSyncStatus('syncing');
   try{
-    const r=await gfetch(GRAPH+'/sites/'+SP_SITE_ID+'/lists/'+listId+'/items',
+    const r=await gfetch(GRAPH+'/sites/'+_spSiteId+'/lists/'+listId+'/items',
       {method:'POST',body:JSON.stringify({fields:incToFields(inc)})});
     if(!r.ok){var t=await r.text();updateSyncStatus('error');_isSaving=false;throw new Error('Create failed: '+r.status+' '+t);}
     const d=await r.json();
@@ -674,7 +688,7 @@ async function saveOneIncident(inc){
   if(!inc.itemId){console.error('[saveOneIncident] missing itemId for',inc.id);return;}
   _isSaving=true;updateSyncStatus('syncing');
   try{
-    const r=await gfetch(GRAPH+'/sites/'+SP_SITE_ID+'/lists/'+listId+'/items/'+inc.itemId+'/fields',
+    const r=await gfetch(GRAPH+'/sites/'+_spSiteId+'/lists/'+listId+'/items/'+inc.itemId+'/fields',
       {method:'PATCH',body:JSON.stringify(incToFields(inc))});
     if(r.ok){updateSyncStatus('saved');setTimeout(function(){updateSyncStatus('connected');},2000);}
     else{updateSyncStatus('error');console.error('[saveOneIncident] patch failed',r.status,await r.text());}
@@ -686,7 +700,7 @@ async function saveOneIncident(inc){
 async function deleteIncidentItem(itemId){
   const listId=await ensureList();
   if(!listId)return false;
-  const r=await gfetch(GRAPH+'/sites/'+SP_SITE_ID+'/lists/'+listId+'/items/'+itemId,{method:'DELETE'});
+  const r=await gfetch(GRAPH+'/sites/'+_spSiteId+'/lists/'+listId+'/items/'+itemId,{method:'DELETE'});
   return r.ok||r.status===204;
 }
 
@@ -1041,7 +1055,7 @@ async function executeClearAll(){
   try{
     const listId=await ensureList();
     if(listId){
-      const r=await gfetch(GRAPH+'/sites/'+SP_SITE_ID+'/lists/'+listId+'/items?$select=id&$top=500');
+      const r=await gfetch(GRAPH+'/sites/'+_spSiteId+'/lists/'+listId+'/items?$select=id&$top=500');
       if(r.ok){
         const d=await r.json();
         var items=d.value||[];
