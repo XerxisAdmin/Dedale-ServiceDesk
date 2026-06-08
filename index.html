@@ -582,11 +582,30 @@ async function ensureList(){
   return null;
 }
 
+/* SharePoint multi-line columns default to RICH TEXT, which HTML-encodes the
+   stored JSON (e.g. " -> &quot;, wrapped in <div>). A plain JSON.parse then
+   fails. This parser tries a direct parse first, then strips HTML tags and
+   decodes HTML entities before parsing — so it works whether the NotesJson
+   column is plain text or rich text. */
+function parseNotesJson(raw){
+  if(!raw)return [];
+  var s=String(raw);
+  try{return JSON.parse(s);}catch(e){}
+  try{
+    var stripped=s.replace(/<[^>]*>/g,'');        /* remove <div>, <br>, etc. */
+    var ta=document.createElement('textarea');
+    ta.innerHTML=stripped;                          /* decode &quot; &amp; &lt; &gt; &#39; */
+    return JSON.parse(ta.value);
+  }catch(e2){
+    console.warn('[parseNotesJson] could not parse NotesJson; raw value was:',raw);
+    return [];
+  }
+}
+
 /* Convert a SharePoint list item into our ticket object */
 function spItemToInc(item){
   var f=item.fields||{};
-  var notes=[];
-  try{notes=f.NotesJson?JSON.parse(f.NotesJson):[];}catch(e){notes=[];}
+  var notes=parseNotesJson(f.NotesJson);
   var n=parseInt(item.id,10);
   return {
     id:'INC'+String(n).padStart(4,'0'),
