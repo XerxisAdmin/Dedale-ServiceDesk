@@ -209,6 +209,7 @@ select.form-control{cursor:pointer;}
       Incidents <span id="open-badge" style="display:none;" class="notif-dot"></span>
     </div>
     <div class="tab" id="tab-submit" onclick="showTab('submit')">+ New Incident</div>
+    <div class="tab" id="tab-settings" onclick="showTab('settings');renderSettings();" style="display:none;">⚙ Settings</div>
   </div>
 
   <!-- Dashboard -->
@@ -219,8 +220,9 @@ select.form-control{cursor:pointer;}
         <div class="page-title">Analytics Dashboard</div>
         <div class="page-sub">INTEL-SD // IT SERVICE DESK</div>
       </div>
-      <div>
-        <button class="btn btn-danger btn-sm" id="clear-inc-btn" onclick="clearAllIncidents()" style="display:none;">&#128465; Clear All Logs</button>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <button class="btn btn-outline btn-sm" id="csv-download-btn" onclick="downloadCSV()" style="display:none;">⬇ Export CSV</button>
+        <button class="btn btn-danger btn-sm" id="clear-inc-btn" onclick="clearAllIncidents()" style="display:none;">🗑 Clear All Logs</button>
       </div>
     </div>
 
@@ -351,6 +353,11 @@ select.form-control{cursor:pointer;}
       </div>
     </div>
   </div>
+
+  <!-- Settings (Super User only) -->
+  <div class="view" id="view-settings">
+    <div id="settings-body"></div>
+  </div>
 </div>
 
 <!-- Incident Detail Modal -->
@@ -379,15 +386,22 @@ const SD_CLEAR_PIN_KEY='sd_clear_pin';
    The list is auto-created on first admin sign-in.
    SharePoint assigns unique item IDs so INC numbers can never collide. */
 const GRAPH='https://graph.microsoft.com/v1.0';
-const SP_SITE_PATH='softwareclub.sharepoint.com:/sites/ITServiceDesk'; /* path-based — no hardcoded GUID */
+const SP_SITE_PATH='softwareclub.sharepoint.com:/sites/ITServiceDesk';
 const SP_LIST_NAME='ServiceDeskTickets';
+const SP_ADMINS_LIST='ITAdmins'; /* Title=DisplayName, Email=email */
 const SCOPES=['Sites.ReadWrite.All','User.Read','User.Read.All','Mail.Send','Mail.Read','Mail.ReadWrite'];
 
 /* ── STATE ── */
-let msalInstance,accessToken,currentUser,isAdmin=false;
+let msalInstance,accessToken,currentUser;
+let isSuperUser=false;  /* hardcoded ADMIN_EMAIL — full access: Settings, CSV, Clear Logs */
+let isITAdmin=false;    /* in ITAdmins list — works tickets, no Settings/CSV/Clear Logs */
+let isAdmin=false;      /* true for both isSuperUser and isITAdmin */
 let incidents=[];
-let _spListId=null;   /* resolved SharePoint list id, cached after first lookup */
-let _spSiteId=null;   /* resolved SharePoint site id, cached after first lookup */
+let _spListId=null;
+let _spSiteId=null;
+let _spAdminsListId=null;
+let _admins=[];      /* [{name,email,itemId}] from ITAdmins */
+let _adminEmails=[]; /* lowercase emails for fast role check */
 
 /* ── SYNC STATUS ── */
 function updateSyncStatus(s){
@@ -470,16 +484,20 @@ function doLogout(){
 }
 
 async function onLoggedIn(){
-  isAdmin=currentUser.username.toLowerCase()===ADMIN_EMAIL.toLowerCase();
+  /* Step 1 — load ITAdmins list to determine role */
+  await loadAdmins();
+  isSuperUser=currentUser.username.toLowerCase()===ADMIN_EMAIL.toLowerCase();
+  isITAdmin=!isSuperUser&&_adminEmails.includes(currentUser.username.toLowerCase());
+  isAdmin=isSuperUser||isITAdmin;
+
   const initials=(currentUser.name||currentUser.username).split(' ').map(n=>n[0]).join('').substring(0,2).toUpperCase();
   document.getElementById('hdr-avatar').textContent=initials;
   document.getElementById('hdr-name').textContent=currentUser.name||currentUser.username;
-  document.getElementById('hdr-role').textContent=isAdmin?'IT ADMIN':'STAFF';
+  document.getElementById('hdr-role').textContent=isSuperUser?'SUPER ADMIN':isITAdmin?'IT ADMIN':'STAFF';
   document.getElementById('login-screen').style.display='none';
   document.getElementById('header').style.display='flex';
   document.getElementById('app').style.display='block';
-  /* Admin: show Dashboard tab, start on Dashboard */
-  /* Staff: hide Dashboard tab, start on Incidents (My Tickets) */
+
   if(isAdmin){
     document.getElementById('tab-dashboard').style.display='inline-block';
     document.getElementById('tab-incidents').style.display='inline-block';
@@ -490,15 +508,25 @@ async function onLoggedIn(){
     document.getElementById('tab-dashboard').style.display='none';
     document.getElementById('tab-incidents').style.display='inline-block';
     document.getElementById('tab-incidents').innerHTML='My Tickets <span id="open-badge" style="display:none;" class="notif-dot"></span>';
-    /* Update incidents page title for staff */
     var t=document.getElementById('inc-page-title');
     var s=document.getElementById('inc-page-sub');
     if(t)t.textContent='My Tickets';
     if(s)s.textContent='Your submitted IT incidents';
     showTab('incidents');
   }
+
+  /* Settings tab — Super User only */
+  var tabSettings=document.getElementById('tab-settings');
+  if(tabSettings)tabSettings.style.display=isSuperUser?'inline-block':'none';
+
+  /* Clear Logs button — Super User only */
   var clearBtn=document.getElementById('clear-inc-btn');
-  if(clearBtn)clearBtn.style.display=isAdmin?'inline-block':'none';
+  if(clearBtn)clearBtn.style.display=isSuperUser?'inline-block':'none';
+
+  /* CSV download button — Super User only */
+  var csvBtn=document.getElementById('csv-download-btn');
+  if(csvBtn)csvBtn.style.display=isSuperUser?'inline-block':'none';
+
   await loadData();
   updateOnlineUI(true);
   updateSyncStatus('connected');
@@ -580,6 +608,162 @@ async function ensureList(){
   console.error('[ensureList] List "'+SP_LIST_NAME+'" not found on the site. It must be created manually in SharePoint.');
   toast('⚠ Ticket list not found on the site.');
   return null;
+}
+
+/* ── IT ADMINS LIST ── */
+async function ensureAdminList(){
+  if(_spAdminsListId)return _spAdminsListId;
+  const siteId=await resolveSiteId();
+  if(!siteId)return null;
+  try{
+    const r=await gfetch(GRAPH+'/sites/'+siteId+'/lists?$select=id,displayName&$top=200');
+    if(r.ok){
+      const d=await r.json();
+      const found=(d.value||[]).find(function(l){return l.displayName===SP_ADMINS_LIST;});
+      if(found){_spAdminsListId=found.id;return _spAdminsListId;}
+    }
+  }catch(e){console.error('[ensureAdminList]',e);}
+  return null;
+}
+
+async function loadAdmins(){
+  try{
+    const listId=await ensureAdminList();
+    if(!listId){_admins=[];_adminEmails=[];return;}
+    const r=await gfetch(GRAPH+'/sites/'+_spSiteId+'/lists/'+listId+'/items?expand=fields&$select=id,fields&$top=200');
+    if(r.ok){
+      const d=await r.json();
+      _admins=(d.value||[]).map(function(item){
+        return{name:item.fields.Title||item.fields.Email||'',email:(item.fields.Email||'').toLowerCase(),itemId:item.id};
+      });
+      _adminEmails=_admins.map(function(a){return a.email;});
+      console.log('[loadAdmins] Loaded',_admins.length,'IT admins');
+    }
+  }catch(e){console.error('[loadAdmins]',e);}
+}
+
+async function addAdminToList(name,email){
+  const siteId=await resolveSiteId();
+  const listId=await ensureAdminList();
+  if(!siteId||!listId){toast('⚠ Could not reach ITAdmins list.');return false;}
+  try{
+    const r=await gfetch(GRAPH+'/sites/'+siteId+'/lists/'+listId+'/items',
+      {method:'POST',body:JSON.stringify({fields:{Title:name,Email:email.toLowerCase()}})});
+    if(r.ok){
+      const d=await r.json();
+      _admins.push({name:name,email:email.toLowerCase(),itemId:d.id});
+      _adminEmails.push(email.toLowerCase());
+      console.log('[addAdmin] Added',email);
+      return true;
+    }
+    console.error('[addAdmin] failed',r.status,await r.text());
+  }catch(e){console.error('[addAdmin]',e);}
+  return false;
+}
+
+async function removeAdminFromList(itemId){
+  const siteId=await resolveSiteId();
+  const listId=await ensureAdminList();
+  if(!siteId||!listId)return false;
+  try{
+    const r=await gfetch(GRAPH+'/sites/'+siteId+'/lists/'+listId+'/items/'+itemId,{method:'DELETE'});
+    if(r.ok||r.status===204){
+      _admins=_admins.filter(function(a){return a.itemId!==itemId;});
+      _adminEmails=_admins.map(function(a){return a.email;});
+      return true;
+    }
+  }catch(e){console.error('[removeAdmin]',e);}
+  return false;
+}
+
+/* ── SETTINGS PAGE ── */
+function renderSettings(){
+  var html='<div class="page-hdr"><div><div class="page-title">⚙ Settings</div><div class="page-sub">SUPER ADMIN ONLY</div></div>';
+  /* CSV download button */
+  html+='<div><button class="btn btn-outline btn-sm" onclick="downloadCSV()" style="margin-right:8px;">⬇ Download CSV</button></div></div>';
+
+  /* IT Admins management */
+  html+='<div style="background:var(--surface);border:1px solid var(--border2);padding:20px;margin-bottom:20px;">';
+  html+='<div class="detail-label" style="margin-bottom:16px;">👥 IT ADMIN ACCOUNTS</div>';
+  html+='<div style="font-size:12px;color:var(--text2);margin-bottom:16px;line-height:1.6;">Admins can view all tickets, take ownership, add notes, and resolve tickets. They cannot access Settings, download CSV, or clear logs.</div>';
+
+  /* Add admin form */
+  html+='<div style="display:flex;gap:10px;margin-bottom:20px;flex-wrap:wrap;">'
+    +'<input class="form-control" id="new-admin-name" placeholder="Display Name (e.g. Juan dela Cruz)" style="flex:1;min-width:180px;">'
+    +'<input class="form-control" id="new-admin-email" placeholder="Email (e.g. juan@dedale.com)" style="flex:1;min-width:200px;">'
+    +'<button class="btn btn-success btn-sm" onclick="handleAddAdmin()" style="white-space:nowrap;">+ ADD ADMIN</button>'
+    +'</div>';
+
+  /* Current admins list */
+  html+='<div class="detail-label" style="margin-bottom:10px;">CURRENT IT ADMINS</div>';
+  if(_admins.length===0){
+    html+='<div style="font-size:12px;color:var(--text3);padding:10px 0;">No IT admins added yet. Add one above.</div>';
+  }else{
+    html+='<div style="display:flex;flex-direction:column;gap:8px;">';
+    _admins.forEach(function(a){
+      html+='<div style="display:flex;align-items:center;justify-content:space-between;background:var(--surface2);border:1px solid var(--border2);padding:10px 16px;">'
+        +'<div><div style="font-size:14px;font-weight:600;color:var(--text);">'+a.name+'</div>'
+        +'<div style="font-size:11px;color:var(--text3);font-family:\'Share Tech Mono\',monospace;">'+a.email+'</div></div>'
+        +'<button class="btn btn-danger btn-sm" onclick="handleRemoveAdmin(\''+a.itemId+'\')">✕ REMOVE</button>'
+        +'</div>';
+    });
+    html+='</div>';
+  }
+  html+='</div>';
+  document.getElementById('settings-body').innerHTML=html;
+}
+
+async function handleAddAdmin(){
+  var nameEl=document.getElementById('new-admin-name');
+  var emailEl=document.getElementById('new-admin-email');
+  if(!nameEl||!emailEl)return;
+  var name=nameEl.value.trim();
+  var email=emailEl.value.trim().toLowerCase();
+  if(!name){toast('Please enter a display name.');return;}
+  if(!email||!email.includes('@')){toast('Please enter a valid email.');return;}
+  if(_adminEmails.includes(email)){toast('That email is already an admin.');return;}
+  if(email===ADMIN_EMAIL.toLowerCase()){toast('That email is already the Super Admin.');return;}
+  var ok=await addAdminToList(name,email);
+  if(ok){nameEl.value='';emailEl.value='';toast('Admin added ✓');renderSettings();}
+  else{toast('⚠ Failed to add admin. Check console.');}
+}
+
+async function handleRemoveAdmin(itemId){
+  if(!confirm('Remove this IT admin?'))return;
+  var ok=await removeAdminFromList(itemId);
+  if(ok){toast('Admin removed ✓');renderSettings();}
+  else{toast('⚠ Failed to remove. Check console.');}
+}
+
+/* ── CSV DOWNLOAD (Super User only) ── */
+function downloadCSV(){
+  if(!isSuperUser){toast('⚠ Access denied.');return;}
+  var headers=['INC#','Title','Status','Category','Urgency','Submitted By','Email','Assigned To','Submitted At','Resolved At','Description','Notes Count'];
+  var rows=incidents.map(function(inc){
+    return[
+      inc.id,
+      '"'+(inc.title||'').replace(/"/g,'""')+'"',
+      inc.status||'',
+      inc.category||'',
+      inc.urgency||'',
+      '"'+(inc.submittedBy||'').replace(/"/g,'""')+'"',
+      inc.submittedByEmail||'',
+      '"'+(inc.assignedTo||'').replace(/"/g,'""')+'"',
+      inc.createdAt?new Date(inc.createdAt).toLocaleString('en-PH'):'',
+      inc.resolvedAt?new Date(inc.resolvedAt).toLocaleString('en-PH'):'',
+      '"'+(inc.description||'').replace(/\n/g,' ').replace(/"/g,'""')+'"',
+      (inc.notes||[]).length
+    ].join(',');
+  });
+  var csv=[headers.join(',')].concat(rows).join('\n');
+  var blob=new Blob([csv],{type:'text/csv'});
+  var url=URL.createObjectURL(blob);
+  var a=document.createElement('a');
+  a.href=url;
+  a.download='ServiceDesk_Export_'+new Date().toISOString().split('T')[0]+'.csv';
+  document.body.appendChild(a);a.click();document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  toast('CSV downloaded ✓');
 }
 
 /* SharePoint multi-line columns default to RICH TEXT, which HTML-encodes the
@@ -813,6 +997,7 @@ function showTab(name){
   if(name==='dashboard'){renderDashboard();renderAnalytics();}
   if(name==='incidents')renderIncidents();
   if(name==='submit')resetSubmitForm();
+  if(name==='settings')renderSettings();
 }
 
 /* ── DASHBOARD ── */
@@ -948,26 +1133,68 @@ function openDetail(id){
   body+='<div style="margin-top:10px;">'    +'<div class="detail-label" style="margin-bottom:6px;">'+noteLabel+'</div>'    +'<textarea class="form-control" id="note-input-'+id+'" placeholder="'+notePlaceholder+'" style="min-height:70px;margin-bottom:8px;"></textarea>'    +'<button class="btn btn-outline btn-sm" onclick="addNote(\''+id+'\')">'+noteBtnLabel+'</button>'    +'</div>';
   body+='</div>';
 
-  /* Admin status actions */
+  /* Action buttons — role-based */
   if(isAdmin){
     body+='<div class="action-row" style="margin-top:12px;">';
-    if(inc.status==='Open')body+='<button class="btn btn-gold btn-sm" onclick="updateStatus(\''+id+'\',\'In Progress\')">▶ IN PROGRESS</button>';
-    if(inc.status!=='Resolved')body+='<button class="btn btn-success btn-sm" onclick="resolveIncident(\''+id+'\')">✓ RESOLVE</button>';
-    if(inc.status==='Resolved')body+='<button class="btn btn-outline btn-sm" onclick="updateStatus(\''+id+'\',\'Open\')">↩ REOPEN</button>';
+
+    /* IN PROGRESS button — both Super User and IT Admin */
+    if(inc.status==='Open'){
+      body+='<button class="btn btn-gold btn-sm" onclick="updateStatus(\''+id+'\',\'In Progress\')">▶ IN PROGRESS</button>';
+    }
+
+    /* RESOLVE — both roles */
+    if(inc.status!=='Resolved'){
+      body+='<button class="btn btn-success btn-sm" onclick="resolveIncident(\''+id+'\')">✓ RESOLVE</button>';
+    }
+
+    /* REOPEN — both roles */
+    if(inc.status==='Resolved'){
+      body+='<button class="btn btn-outline btn-sm" onclick="updateStatus(\''+id+'\',\'Open\')">↩ REOPEN</button>';
+    }
+
+    /* ASSIGN DROPDOWN — Super User only */
+    if(isSuperUser&&inc.status!=='Resolved'){
+      var assignees=[{name:'Xerxis Dalanon (You)',email:ADMIN_EMAIL}].concat(_admins);
+      var opts=assignees.map(function(a){
+        var sel=inc.assignedTo&&inc.assignedTo.toLowerCase()===a.name.toLowerCase()?'selected':'';
+        return'<option value="'+a.name+'" '+sel+'>'+a.name+'</option>';
+      }).join('');
+      body+='<div style="margin-top:10px;display:flex;align-items:center;gap:8px;">'
+        +'<div class="detail-label" style="margin-bottom:0;white-space:nowrap;">ASSIGN TO:</div>'
+        +'<select class="f-select" id="assign-select-'+id+'" style="flex:1;">'
+        +'<option value="">— Unassigned —</option>'+opts
+        +'</select>'
+        +'<button class="btn btn-outline btn-sm" onclick="handleAssign(\''+id+'\')">ASSIGN</button>'
+        +'</div>';
+    }
     body+='</div>';
+  }
+
+  /* REOPEN for staff on their own resolved tickets */
+  if(!isAdmin&&inc.status==='Resolved'&&inc.submittedByEmail&&currentUser&&inc.submittedByEmail.toLowerCase()===currentUser.username.toLowerCase()){
+    body+='<div class="action-row" style="margin-top:12px;">'
+      +'<button class="btn btn-outline btn-sm" onclick="updateStatus(\''+id+'\',\'Open\')">↩ REOPEN — Issue Recurring?</button>'
+      +'</div>';
   }
 
   document.getElementById('detail-body').innerHTML=body;
   document.getElementById('detail-modal').classList.add('open');
 }
 
-async function updateStatus(id,status,techName){
+async function updateStatus(id,status,forcedAssignee){
   var idx=incidents.findIndex(function(i){return i.id===id;});
   if(idx<0)return;
   incidents[idx].status=status;
   incidents[idx].updatedAt=new Date().toISOString();
   if(status==='In Progress'){
-    incidents[idx].assignedTo=techName||(currentUser?currentUser.name||currentUser.username:'Xerxis Dalanon');
+    if(forcedAssignee){
+      /* Super User manually assigned via dropdown */
+      incidents[idx].assignedTo=forcedAssignee;
+    }else if(!incidents[idx].assignedTo){
+      /* First click — no existing owner — auto-assign to whoever clicked */
+      incidents[idx].assignedTo=currentUser.name||currentUser.username;
+    }
+    /* If already assigned and no forced override, keep existing owner */
     incidents[idx].assignedAt=new Date().toISOString();
   }
   if(status==='Open'){
@@ -984,6 +1211,23 @@ async function updateStatus(id,status,techName){
   closeModal('detail-modal');
   renderDashboard();renderIncidents();
   toast('Status updated to '+status);
+}
+
+/* Super User manual assign from dropdown */
+async function handleAssign(id){
+  if(!isSuperUser)return;
+  var sel=document.getElementById('assign-select-'+id);
+  if(!sel)return;
+  var assignee=sel.value||null;
+  var idx=incidents.findIndex(function(i){return i.id===id;});
+  if(idx<0)return;
+  incidents[idx].assignedTo=assignee;
+  incidents[idx].updatedAt=new Date().toISOString();
+  var incCopy=JSON.parse(JSON.stringify(incidents[idx]));
+  await saveOneIncident(incCopy);
+  closeModal('detail-modal');
+  renderDashboard();renderIncidents();
+  toast(assignee?'Assigned to '+assignee+' ✓':'Unassigned ✓');
 }
 
 async function resolveIncident(id){
