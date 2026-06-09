@@ -376,6 +376,7 @@ select.form-control{cursor:pointer;}
 
 <script>
 /* ── CONFIG ── */
+console.log('%c[Dedale Service Desk] BUILD 2026-06-09b — roles + CSV-with-notes + HTML-strip','color:#22cc88;font-weight:bold;');
 const CLIENT_ID='efcad5dc-5a65-4e5a-906b-54db03b58824';
 const TENANT_ID='115d6eac-9c52-4e39-9c4c-f8d77ede8a9d';
 const ADMIN_EMAIL='xerxis.dalanon@dedale.com';
@@ -736,17 +737,24 @@ async function handleRemoveAdmin(itemId){
 }
 
 /* ── CSV DOWNLOAD (Super User only) ── */
+/* Strip HTML tags + decode entities (SharePoint rich-text fields come back wrapped in <div class="ExternalClass...">) */
+function stripHtml(s){
+  if(!s)return'';
+  var noTags=String(s).replace(/<[^>]*>/g,' ');
+  var ta=document.createElement('textarea');
+  ta.innerHTML=noTags;
+  return ta.value.replace(/\s+/g,' ').trim();
+}
 function downloadCSV(){
   if(!isSuperUser){toast('⚠ Access denied.');return;}
   var headers=['INC#','Title','Status','Category','Urgency','Submitted By','Email','Assigned To','Submitted At','Resolved At','SLA Status','Description','Notes Count','Notes'];
   var rows=incidents.map(function(inc){
-    /* Build notes as readable text: "Note 1 [Tech Note | Xerxis | Jun 8 2026 4:48PM]: text || Note 2..." */
     var notesText='';
     if(inc.notes&&inc.notes.length){
       notesText=inc.notes.map(function(n,i){
         var type=n.type==='tech'?'Tech Note':'Staff Reply';
         var date=n.at?new Date(n.at).toLocaleString('en-PH'):'';
-        return'Note '+(i+1)+' ['+type+' | '+(n.by||'')+' | '+date+']: '+(n.text||'');
+        return'Note '+(i+1)+' ['+type+' | '+(n.by||'')+' | '+date+']: '+stripHtml(n.text||'');
       }).join(' || ');
     }
     var slaStatus=(function(){
@@ -767,7 +775,7 @@ function downloadCSV(){
       inc.createdAt?new Date(inc.createdAt).toLocaleString('en-PH'):'',
       inc.resolvedAt?new Date(inc.resolvedAt).toLocaleString('en-PH'):'',
       slaStatus,
-      '"'+(inc.description||'').replace(/\n/g,' ').replace(/"/g,'""')+'"',
+      '"'+stripHtml(inc.description||'').replace(/"/g,'""')+'"',
       (inc.notes||[]).length,
       '"'+notesText.replace(/"/g,'""')+'"'
     ].join(',');
