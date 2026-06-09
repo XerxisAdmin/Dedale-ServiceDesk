@@ -738,8 +738,23 @@ async function handleRemoveAdmin(itemId){
 /* ── CSV DOWNLOAD (Super User only) ── */
 function downloadCSV(){
   if(!isSuperUser){toast('⚠ Access denied.');return;}
-  var headers=['INC#','Title','Status','Category','Urgency','Submitted By','Email','Assigned To','Submitted At','Resolved At','Description','Notes Count'];
+  var headers=['INC#','Title','Status','Category','Urgency','Submitted By','Email','Assigned To','Submitted At','Resolved At','SLA Status','Description','Notes Count','Notes'];
   var rows=incidents.map(function(inc){
+    /* Build notes as readable text: "Note 1 [Tech Note | Xerxis | Jun 8 2026 4:48PM]: text || Note 2..." */
+    var notesText='';
+    if(inc.notes&&inc.notes.length){
+      notesText=inc.notes.map(function(n,i){
+        var type=n.type==='tech'?'Tech Note':'Staff Reply';
+        var date=n.at?new Date(n.at).toLocaleString('en-PH'):'';
+        return'Note '+(i+1)+' ['+type+' | '+(n.by||'')+' | '+date+']: '+(n.text||'');
+      }).join(' || ');
+    }
+    var slaStatus=(function(){
+      if(inc.status==='Resolved')return'Resolved';
+      var s=getSLAStatus(inc);
+      if(!s)return'Within SLA';
+      return s.label||'Within SLA';
+    })();
     return[
       inc.id,
       '"'+(inc.title||'').replace(/"/g,'""')+'"',
@@ -751,12 +766,14 @@ function downloadCSV(){
       '"'+(inc.assignedTo||'').replace(/"/g,'""')+'"',
       inc.createdAt?new Date(inc.createdAt).toLocaleString('en-PH'):'',
       inc.resolvedAt?new Date(inc.resolvedAt).toLocaleString('en-PH'):'',
+      slaStatus,
       '"'+(inc.description||'').replace(/\n/g,' ').replace(/"/g,'""')+'"',
-      (inc.notes||[]).length
+      (inc.notes||[]).length,
+      '"'+notesText.replace(/"/g,'""')+'"'
     ].join(',');
   });
   var csv=[headers.join(',')].concat(rows).join('\n');
-  var blob=new Blob([csv],{type:'text/csv'});
+  var blob=new Blob(['\uFEFF'+csv],{type:'text/csv;charset=utf-8'});
   var url=URL.createObjectURL(blob);
   var a=document.createElement('a');
   a.href=url;
